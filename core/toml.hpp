@@ -45,12 +45,12 @@ struct Value
 
     Kind kind = Kind::Table;
 
-    std::string str;
+    std::string  str;
     std::int64_t integer = 0;
-    bool boolean = false;
+    bool         boolean = false;
 
-    std::vector<Value> array;
-    std::map<std::string, Value> table;   // std::map ⇒ deterministic iteration
+    std::vector<Value>           array;
+    std::map<std::string, Value> table; // std::map ⇒ deterministic iteration
 };
 
 // --- Value constructors ---------------------------------------------------------
@@ -74,16 +74,23 @@ bool is_string(const Value& v);
 // anything up by dotted path.
 class Document
 {
-  public:
+public:
     // Look up a dotted path such as "plugins.cmake-cpp.generator". Returns
     // std::nullopt when any component is missing or the path steps through a
     // non-table value.
     std::optional<Value> get(std::string_view path) const;
 
-    const Value& root() const { return root_; }
-    Value& root() { return root_; }
+    const Value& root() const
+    {
+        return root_;
+    }
 
-  private:
+    Value& root()
+    {
+        return root_;
+    }
+
+private:
     Value root_;
 };
 

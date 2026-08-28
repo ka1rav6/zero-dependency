@@ -38,7 +38,7 @@ KAP_TEST("operator[] bounds-checks instead of reading out of range")
     // List::operator[] forwards to std::vector::at, so an out-of-range index
     // throws rather than silently returning garbage.
     const kap::argv::List l = {"cmake"};
-    KAP_ASSERT_THROWS(std::out_of_range, (void)l[5]);
+    KAP_ASSERT_THROWS(std::out_of_range, (void) l[5]);
 });
 
 KAP_TEST("vec() exposes the underlying storage unchanged")

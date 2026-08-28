@@ -119,8 +119,8 @@ int run_config_get(const kap::cli::GlobalOptions& global, const std::vector<std:
         return 1;
     }
 
-    const std::string text = kap::fs::read_text(file);
-    const kap::toml::Document doc = kap::toml::parse(text, file.string());
+    const std::string         text = kap::fs::read_text(file);
+    const kap::toml::Document doc  = kap::toml::parse(text, file.string());
 
     const auto value = doc.get(key);
     if (!value) {
@@ -147,7 +147,7 @@ int run_config(const kap::cli::GlobalOptions& global, const std::vector<std::str
         return 2;
     }
 
-    const std::string& subcommand = argv[0];
+    const std::string&             subcommand = argv[0];
     const std::vector<std::string> rest(argv.begin() + 1, argv.end());
 
     if (subcommand == "get") {
@@ -173,7 +173,7 @@ int main(int argc, char** argv)
     try {
         // argv[0] is the program name; everything after is what we parse.
         const std::vector<std::string> args(argv + 1, argv + argc);
-        const kap::cli::Invocation inv = kap::cli::parse(args);
+        const kap::cli::Invocation     inv = kap::cli::parse(args);
 
         if (inv.global.version) {
             std::cout << kap::kProgramName << " " << kap::kVersionString << "\n";
@@ -196,12 +196,14 @@ int main(int argc, char** argv)
         std::cerr << "kap: unknown command '" << inv.command << "'\n";
         print_usage(std::cerr);
         return 2;
-    } catch (const kap::diag::Error& e) {
+    }
+    catch (const kap::diag::Error& e) {
         // Every subsystem reports failures through diag::Error; one catch
         // here converts any of them into the same styled stderr line.
         std::cerr << e.report();
         return 1;
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e) {
         // Not everything that can go wrong is a diag::Error. std::filesystem
         // throws filesystem_error (current_path() fails if the working
         // directory was deleted out from under us), std::bad_alloc exists, and

@@ -15,8 +15,8 @@ KAP_TEST("parses top-level scalars")
 {
     const kap::toml::Document doc = kap::toml::parse("name = \"kap\"\ncount = 42\nactive = true\n");
 
-    const auto name = doc.get("name");
-    const auto count = doc.get("count");
+    const auto name   = doc.get("name");
+    const auto count  = doc.get("count");
     const auto active = doc.get("active");
 
     KAP_ASSERT(name.has_value());
@@ -40,8 +40,8 @@ KAP_TEST("negative integers parse")
 
 KAP_TEST("parses nested tables and dotted lookups")
 {
-    const kap::toml::Document doc = kap::toml::parse(
-        "[plugins.cmake-cpp]\ngenerator = \"ninja\"\nbuild_dir = \"out\"\n");
+    const kap::toml::Document doc =
+        kap::toml::parse("[plugins.cmake-cpp]\ngenerator = \"ninja\"\nbuild_dir = \"out\"\n");
 
     const auto gen = doc.get("plugins.cmake-cpp.generator");
     KAP_ASSERT(gen.has_value());
@@ -55,8 +55,8 @@ KAP_TEST("parses nested tables and dotted lookups")
 
 KAP_TEST("parses arrays of strings and integers")
 {
-    const kap::toml::Document doc =
-        kap::toml::parse("cmake_args = [\"-DCMAKE_BUILD_TYPE=Debug\", \"-j\"]\nports = [80, 443]\n");
+    const kap::toml::Document doc = kap::toml::parse(
+        "cmake_args = [\"-DCMAKE_BUILD_TYPE=Debug\", \"-j\"]\nports = [80, 443]\n");
 
     const auto args = doc.get("cmake_args");
     KAP_ASSERT(args.has_value());
@@ -72,7 +72,7 @@ KAP_TEST("parses arrays of strings and integers")
 KAP_TEST("empty arrays parse")
 {
     const kap::toml::Document doc = kap::toml::parse("xs = []\n");
-    const auto xs = doc.get("xs");
+    const auto                xs  = doc.get("xs");
     KAP_ASSERT(xs.has_value());
     KAP_ASSERT(xs->kind == kap::toml::Value::Kind::Array);
     KAP_ASSERT(xs->array.empty());
@@ -86,7 +86,8 @@ KAP_TEST("string escape sequences decode")
 
 KAP_TEST("comments are stripped, including trailing ones")
 {
-    const kap::toml::Document doc = kap::toml::parse("# header comment\na = 1 # trailing\n\n# another\n");
+    const kap::toml::Document doc =
+        kap::toml::parse("# header comment\na = 1 # trailing\n\n# another\n");
     KAP_ASSERT_EQ(doc.get("a")->integer, static_cast<std::int64_t>(1));
 });
 
@@ -95,8 +96,9 @@ KAP_TEST("parse errors carry a located diagnostic (line:col)")
     const std::string text = "a = 1\nb = @\n";
     try {
         kap::toml::parse(text, "kap.toml");
-        KAP_ASSERT(false);   // unreachable: this input must fail
-    } catch (const kap::diag::Error& e) {
+        KAP_ASSERT(false); // unreachable: this input must fail
+    }
+    catch (const kap::diag::Error& e) {
         KAP_ASSERT(e.diagnostic().location.line == 2);
         KAP_ASSERT(e.diagnostic().location.col >= 1);
         KAP_ASSERT(e.report().find("kap.toml:2:") != std::string::npos);
@@ -120,8 +122,10 @@ KAP_TEST("unterminated strings are rejected")
 
 KAP_TEST("table conflicts with an existing scalar are rejected")
 {
-    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("plugins = \"gone\"\n[plugins.cmake-cpp]\n"));
+    KAP_ASSERT_THROWS(kap::diag::Error,
+                      kap::toml::parse("plugins = \"gone\"\n[plugins.cmake-cpp]\n"));
 });
+
 // --- Regression tests for the section-header retargeting bug ---------------------
 // A `[header]` line must re-point where subsequent `key = value` lines land.
 // The original parser created the table but kept writing keys into the document
@@ -131,7 +135,8 @@ KAP_TEST("table conflicts with an existing scalar are rejected")
 
 KAP_TEST("keys after a table header land inside that table, not at the root")
 {
-    const kap::toml::Document doc = kap::toml::parse("[server]\nhost = \"localhost\"\nport = 8080\n");
+    const kap::toml::Document doc =
+        kap::toml::parse("[server]\nhost = \"localhost\"\nport = 8080\n");
 
     KAP_ASSERT(doc.get("server.host").has_value());
     KAP_ASSERT_EQ(doc.get("server.host")->str, "localhost");
@@ -144,8 +149,7 @@ KAP_TEST("keys after a table header land inside that table, not at the root")
 
 KAP_TEST("consecutive table headers each capture their own keys")
 {
-    const kap::toml::Document doc =
-        kap::toml::parse("[a]\nx = 1\n\n[b]\nx = 2\n\n[c.d]\nx = 3\n");
+    const kap::toml::Document doc = kap::toml::parse("[a]\nx = 1\n\n[b]\nx = 2\n\n[c.d]\nx = 3\n");
 
     KAP_ASSERT_EQ(doc.get("a.x")->integer, static_cast<std::int64_t>(1));
     KAP_ASSERT_EQ(doc.get("b.x")->integer, static_cast<std::int64_t>(2));
@@ -210,7 +214,8 @@ KAP_TEST("arrays may span multiple lines and carry a trailing comma")
 
 KAP_TEST("spaces are allowed around the dots of a table header")
 {
-    const kap::toml::Document doc = kap::toml::parse("[ plugins . cmake-cpp ]\ngenerator = \"ninja\"\n");
+    const kap::toml::Document doc =
+        kap::toml::parse("[ plugins . cmake-cpp ]\ngenerator = \"ninja\"\n");
     KAP_ASSERT_EQ(doc.get("plugins.cmake-cpp.generator")->str, "ninja");
 });
 

@@ -21,8 +21,8 @@ namespace
 // test that creates one.
 std::filesystem::path scratch(const std::string& name)
 {
-    const std::filesystem::path dir =
-        std::filesystem::temp_directory_path() / ("kap_test_" + name + "_" + std::to_string(getpid()));
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() /
+                                      ("kap_test_" + name + "_" + std::to_string(getpid()));
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     return dir;
@@ -76,7 +76,9 @@ KAP_TEST("read_text rejects files larger than the cap")
 
 KAP_TEST("read_text throws on a missing file")
 {
-    KAP_ASSERT_THROWS(kap::diag::Error, kap::fs::read_text(std::filesystem::temp_directory_path() / "kap_no_such_file_xyz"));
+    KAP_ASSERT_THROWS(
+        kap::diag::Error,
+        kap::fs::read_text(std::filesystem::temp_directory_path() / "kap_no_such_file_xyz"));
 });
 
 KAP_TEST("glob returns matching names, sorted, relative to the directory")
@@ -115,7 +117,7 @@ KAP_TEST("match_wildcard handles star, question, and literals")
 
 KAP_TEST("is_within accepts paths under the root and rejects escapes")
 {
-    const std::filesystem::path dir = scratch("within");
+    const std::filesystem::path dir    = scratch("within");
     const std::filesystem::path inside = dir / "sub" / "file.txt";
     std::filesystem::create_directories(inside.parent_path());
     write_file(inside, "x");
@@ -132,6 +134,7 @@ KAP_TEST("is_within accepts paths under the root and rejects escapes")
     std::filesystem::remove_all(sibling);
     std::filesystem::remove_all(dir);
 });
+
 // --- Wildcard matching: correctness and cost -------------------------------------
 
 KAP_TEST("match_wildcard handles multiple and adjacent stars")
@@ -211,7 +214,7 @@ KAP_TEST("read_text enforces its cap on the stream, not on a stat() result")
 KAP_TEST("read_text accepts a file of exactly the cap size")
 {
     // Off-by-one guard: the cap is a maximum, not an exclusive bound.
-    const std::filesystem::path dir = scratch("exact_cap");
+    const std::filesystem::path dir  = scratch("exact_cap");
     const std::filesystem::path file = dir / "exact.txt";
     write_file(file, std::string(64, 'x'));
 
@@ -223,7 +226,7 @@ KAP_TEST("read_text accepts a file of exactly the cap size")
 
 KAP_TEST("read_text reads an empty file as an empty string")
 {
-    const std::filesystem::path dir = scratch("empty_read");
+    const std::filesystem::path dir  = scratch("empty_read");
     const std::filesystem::path file = dir / "empty.txt";
     write_file(file, "");
 
@@ -236,9 +239,9 @@ KAP_TEST("read_text preserves embedded NUL bytes and binary content")
 {
     // Reads are byte-exact: a length-based read must not stop at a NUL the way
     // a C-string copy would.
-    const std::filesystem::path dir = scratch("binary_read");
-    const std::filesystem::path file = dir / "bin.dat";
-    const std::string payload = std::string("a\0b\0c", 5);
+    const std::filesystem::path dir     = scratch("binary_read");
+    const std::filesystem::path file    = dir / "bin.dat";
+    const std::string           payload = std::string("a\0b\0c", 5);
     write_file(file, payload);
 
     const std::string got = kap::fs::read_text(file);
@@ -252,9 +255,10 @@ KAP_TEST("read_text rejects a directory with a distinct message")
 {
     const std::filesystem::path dir = scratch("read_dir");
     try {
-        (void)kap::fs::read_text(dir);
-        KAP_ASSERT(false);   // unreachable
-    } catch (const kap::diag::Error& e) {
+        (void) kap::fs::read_text(dir);
+        KAP_ASSERT(false); // unreachable
+    }
+    catch (const kap::diag::Error& e) {
         KAP_ASSERT(e.report().find("not a regular file") != std::string::npos);
     }
     std::filesystem::remove_all(dir);
@@ -263,9 +267,11 @@ KAP_TEST("read_text rejects a directory with a distinct message")
 KAP_TEST("read_text says 'no such file' for a missing path")
 {
     try {
-        (void)kap::fs::read_text(std::filesystem::temp_directory_path() / "kap_definitely_missing");
-        KAP_ASSERT(false);   // unreachable
-    } catch (const kap::diag::Error& e) {
+        (void) kap::fs::read_text(std::filesystem::temp_directory_path() /
+                                  "kap_definitely_missing");
+        KAP_ASSERT(false); // unreachable
+    }
+    catch (const kap::diag::Error& e) {
         KAP_ASSERT(e.report().find("no such file") != std::string::npos);
     }
 });
@@ -327,7 +333,7 @@ KAP_TEST("is_within is not fooled by a sibling with the root as a name prefix")
 {
     // "/tmp/kap_root" and "/tmp/kap_root_evil" share a textual prefix but are
     // different directories; a naive string comparison would accept the second.
-    const std::filesystem::path dir = scratch("prefix");
+    const std::filesystem::path dir     = scratch("prefix");
     const std::filesystem::path sibling = dir.string() + "_evil";
     std::filesystem::create_directories(sibling);
 

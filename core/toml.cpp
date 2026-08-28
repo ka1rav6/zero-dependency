@@ -65,24 +65,35 @@ Value make_table()
     return v;
 }
 
-bool is_table(const Value& v) { return v.kind == Value::Kind::Table; }
-bool is_array(const Value& v) { return v.kind == Value::Kind::Array; }
-bool is_string(const Value& v) { return v.kind == Value::Kind::String; }
+bool is_table(const Value& v)
+{
+    return v.kind == Value::Kind::Table;
+}
+
+bool is_array(const Value& v)
+{
+    return v.kind == Value::Kind::Array;
+}
+
+bool is_string(const Value& v)
+{
+    return v.kind == Value::Kind::String;
+}
 
 std::optional<Value> Document::get(std::string_view path) const
 {
     // Walk the dotted path through nested tables, failing on any missing
     // segment or any non-table value encountered on the way.
     const Value* current = &root_;
-    std::size_t start    = 0;
+    std::size_t  start   = 0;
     for (;;) {
         const std::size_t dot = path.find('.', start);
         const std::size_t end = dot == std::string_view::npos ? path.size() : dot;
         if (end == start || current->kind != Value::Kind::Table) {
-            return std::nullopt;   // empty segment or stepped through a scalar
+            return std::nullopt; // empty segment or stepped through a scalar
         }
         const std::string_view segment = path.substr(start, end - start);
-        const auto it = current->table.find(std::string(segment));
+        const auto             it      = current->table.find(std::string(segment));
         if (it == current->table.end()) {
             return std::nullopt;
         }
@@ -102,11 +113,10 @@ namespace
 // failure can be reported with a precise location.
 class Parser
 {
-  public:
+public:
     Parser(std::string_view text, std::string source_name)
         : text_(text), source_name_(std::move(source_name))
-    {
-    }
+    {}
 
     Document run()
     {
@@ -115,10 +125,14 @@ class Parser
         return doc;
     }
 
-  private:
+private:
     static constexpr char kEof = '\0';
 
-    bool at_end() const { return pos_ >= text_.size(); }
+    bool at_end() const
+    {
+        return pos_ >= text_.size();
+    }
+
     char peek(std::size_t ahead = 0) const
     {
         return pos_ + ahead < text_.size() ? text_[pos_ + ahead] : kEof;
@@ -141,8 +155,9 @@ class Parser
 
     [[noreturn]] void fail(const std::string& message) const
     {
-        throw diag::Error{diag::error(message, diag::Location{source_name_, static_cast<int>(line_),
-                                                              static_cast<int>(col_)})};
+        throw diag::Error{diag::error(
+            message,
+            diag::Location{source_name_, static_cast<int>(line_), static_cast<int>(col_)})};
     }
 
     // Skip the current line (its comment part) and reposition at the newline.
@@ -210,11 +225,14 @@ class Parser
 
     static bool is_bare_key_char(char c)
     {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-               (c >= '0' && c <= '9') || c == '_' || c == '-';
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_' || c == '-';
     }
 
-    static bool is_digit(char c) { return c >= '0' && c <= '9'; }
+    static bool is_digit(char c)
+    {
+        return c >= '0' && c <= '9';
+    }
 
     // parse_body: the statement loop of the document.
     //
@@ -240,14 +258,14 @@ class Parser
             }
 
             if (peek() == '[') {
-                advance();   // consume '['
+                advance(); // consume '['
                 skip_inline_ws();
                 const std::string path = read_table_path();
                 skip_inline_ws();
                 if (peek() != ']') {
                     fail("expected ']' to close the table header");
                 }
-                advance();   // consume ']'
+                advance(); // consume ']'
                 require_end_of_line();
 
                 // TOML forbids opening the same table twice; without this a
@@ -283,7 +301,7 @@ class Parser
             if (peek() != '.') {
                 return path;
             }
-            advance();   // consume '.'
+            advance(); // consume '.'
             skip_inline_ws();
         }
     }
@@ -294,11 +312,11 @@ class Parser
     // config bugs show up.
     Value& descend(Value& root, const std::string& path)
     {
-        Value* current = &root;
-        std::size_t start = 0;
+        Value*      current = &root;
+        std::size_t start   = 0;
         for (;;) {
-            const std::size_t dot = path.find('.', start);
-            const std::size_t end = dot == std::string::npos ? path.size() : dot;
+            const std::size_t dot     = path.find('.', start);
+            const std::size_t end     = dot == std::string::npos ? path.size() : dot;
             const std::string segment = path.substr(start, end - start);
 
             if (current->kind != Value::Kind::Table) {
@@ -327,7 +345,7 @@ class Parser
         if (peek() != '=') {
             fail("expected '=' after key '" + key + "'");
         }
-        advance();   // consume '='
+        advance(); // consume '='
         skip_inline_ws();
 
         Value value = parse_value();
@@ -363,7 +381,7 @@ class Parser
 
     Value parse_string()
     {
-        advance();   // consume opening '"'
+        advance(); // consume opening '"'
         std::string out;
         for (;;) {
             if (at_end() || peek() == '\n') {
@@ -372,7 +390,7 @@ class Parser
             const char c = peek();
 
             if (c == '"') {
-                advance();   // consume closing '"'
+                advance(); // consume closing '"'
                 return make_string(std::move(out));
             }
 
@@ -384,21 +402,31 @@ class Parser
 
             // Escape sequences; anything unknown is an error so a typo like
             // "\q" cannot silently change meaning.
-            advance();   // consume '\'
+            advance(); // consume '\'
             if (at_end() || peek() == '\n') {
                 fail("unterminated string literal");
             }
             const char esc = peek();
             switch (esc) {
-                case '"':  out += '"';  break;
-                case '\\': out += '\\'; break;
-                case 'n':  out += '\n'; break;
-                case 't':  out += '\t'; break;
-                case 'r':  out += '\r'; break;
+                case '"':
+                    out += '"';
+                    break;
+                case '\\':
+                    out += '\\';
+                    break;
+                case 'n':
+                    out += '\n';
+                    break;
+                case 't':
+                    out += '\t';
+                    break;
+                case 'r':
+                    out += '\r';
+                    break;
                 default:
                     fail(std::string("unsupported escape sequence '\\") + esc + "'");
             }
-            advance();   // consume the escaped character
+            advance(); // consume the escaped character
         }
     }
 
@@ -426,9 +454,9 @@ class Parser
 
         std::int64_t parsed = 0;
         // std::from_chars does not accept a leading '+', so skip past it.
-        const char* first = digits.data() + (digits.front() == '+' ? 1 : 0);
-        const char* last  = digits.data() + digits.size();
-        const auto result = std::from_chars(first, last, parsed);
+        const char* first  = digits.data() + (digits.front() == '+' ? 1 : 0);
+        const char* last   = digits.data() + digits.size();
+        const auto  result = std::from_chars(first, last, parsed);
         if (result.ec != std::errc{} || result.ptr != last) {
             fail("integer out of range: '" + std::string(digits) + "'");
         }
@@ -472,7 +500,7 @@ class Parser
 
     Value parse_array()
     {
-        advance();   // consume '['
+        advance(); // consume '['
         Value array = make_array();
 
         for (;;) {
@@ -499,22 +527,22 @@ class Parser
             if (peek() != ',') {
                 break;
             }
-            advance();   // consume ',' and look for another element
+            advance(); // consume ',' and look for another element
         }
 
         skip_array_ws();
         if (peek() != ']') {
             fail("expected ']' to close the array");
         }
-        advance();   // consume ']'
+        advance(); // consume ']'
         return array;
     }
 
     std::string_view text_;
-    std::string source_name_;
-    std::size_t pos_ = 0;
-    std::size_t line_ = 1;
-    std::size_t col_ = 1;
+    std::string      source_name_;
+    std::size_t      pos_  = 0;
+    std::size_t      line_ = 1;
+    std::size_t      col_  = 1;
 
     // Every `[header]` seen so far, so a duplicate can be reported.
     std::set<std::string> defined_headers_;

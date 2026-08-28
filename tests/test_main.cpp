@@ -36,7 +36,10 @@ int main()
             // own declaration (recorded by KAP_TEST) so the reader can find it
             // without grepping for the name.
             std::printf("[FAIL] %s\n  %s:%d: unexpected exception: %s\n",
-                        test.name.c_str(), test.file.c_str(), test.line, e.what());
+                        test.name.c_str(),
+                        test.file.c_str(),
+                        test.line,
+                        e.what());
         }
         catch (...) {
             // Something not derived from std::exception escaped. Without this
@@ -44,7 +47,9 @@ int main()
             // the run would report nothing at all — not even the tests that had
             // already passed — and CI would show a bare non-zero exit code.
             std::printf("[FAIL] %s\n  %s:%d: unexpected non-standard exception\n",
-                        test.name.c_str(), test.file.c_str(), test.line);
+                        test.name.c_str(),
+                        test.file.c_str(),
+                        test.line);
         }
         ++failed;
     }

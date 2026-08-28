@@ -144,7 +144,7 @@ template <typename T> std::string to_string_display(const T& v)
 #define KAP_ASSERT_EQ(a, b)                                                                        \
     do {                                                                                           \
         const auto kap_test_lhs = (a);                                                             \
-        const auto kap_test_rhs = (b);                                                              \
+        const auto kap_test_rhs = (b);                                                             \
         if (!(kap_test_lhs == kap_test_rhs)) {                                                     \
             ::kap_test::fail_test(__FILE__,                                                        \
                                   __LINE__,                                                        \
@@ -159,13 +159,13 @@ template <typename T> std::string to_string_display(const T& v)
 #define KAP_ASSERT_NE(a, b)                                                                        \
     do {                                                                                           \
         const auto kap_test_lhs = (a);                                                             \
-        const auto kap_test_rhs = (b);                                                              \
+        const auto kap_test_rhs = (b);                                                             \
         if (kap_test_lhs == kap_test_rhs) {                                                        \
             ::kap_test::fail_test(__FILE__,                                                        \
                                   __LINE__,                                                        \
                                   std::string("expected '") + #a + "' != '" + #b +                 \
                                       "' but both are '" +                                         \
-                                      ::kap_test::to_string_display(kap_test_lhs) + "'");           \
+                                      ::kap_test::to_string_display(kap_test_lhs) + "'");          \
         }                                                                                          \
     } while (0)
 
@@ -185,15 +185,17 @@ template <typename T> std::string to_string_display(const T& v)
     do {                                                                                           \
         bool kap_test_threw = false;                                                               \
         try {                                                                                      \
-            (void)(expr);                                                                          \
-        } catch (const exception_type&) {                                                          \
+            (void) (expr);                                                                         \
+        }                                                                                          \
+        catch (const exception_type&) {                                                            \
             kap_test_threw = true;                                                                 \
-        } catch (const std::exception& kap_test_other) {                                           \
+        }                                                                                          \
+        catch (const std::exception& kap_test_other) {                                             \
             ::kap_test::fail_test(__FILE__,                                                        \
                                   __LINE__,                                                        \
                                   std::string("expected '") + #expr + "' to throw " +              \
-                                      #exception_type + " but it threw something else: " +         \
-                                      kap_test_other.what());                                      \
+                                      #exception_type +                                            \
+                                      " but it threw something else: " + kap_test_other.what());   \
         }                                                                                          \
         if (!kap_test_threw) {                                                                     \
             ::kap_test::fail_test(__FILE__,                                                        \

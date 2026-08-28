@@ -27,7 +27,8 @@ bool assertion_failed(const std::function<void()>& body)
 {
     try {
         body();
-    } catch (const kap_test::AssertionFailure&) {
+    }
+    catch (const kap_test::AssertionFailure&) {
         return true;
     }
     return false;
@@ -38,7 +39,8 @@ std::string failure_message(const std::function<void()>& body)
 {
     try {
         body();
-    } catch (const kap_test::AssertionFailure& e) {
+    }
+    catch (const kap_test::AssertionFailure& e) {
         return e.message;
     }
     return {};
@@ -98,8 +100,8 @@ KAP_TEST("harness: KAP_ASSERT_EQ evaluates each operand exactly once")
 {
     // The macro binds each operand to a reference before comparing. If it
     // instead expanded the arguments twice, a counter would land on 2.
-    int calls = 0;
-    const auto bump = [&calls] { return ++calls; };
+    int        calls = 0;
+    const auto bump  = [&calls] { return ++calls; };
 
     KAP_ASSERT(assertion_failed([&] { KAP_ASSERT_EQ(bump(), 99); }));
     KAP_ASSERT_EQ(calls, 1);
@@ -117,9 +119,8 @@ KAP_TEST("harness: KAP_ASSERT_NE is the exact inverse of KAP_ASSERT_EQ")
 
 KAP_TEST("harness: KAP_ASSERT_THROWS passes when the expected type is thrown")
 {
-    KAP_ASSERT(!assertion_failed([] {
-        KAP_ASSERT_THROWS(std::runtime_error, throw std::runtime_error("boom"));
-    }));
+    KAP_ASSERT(!assertion_failed(
+        [] { KAP_ASSERT_THROWS(std::runtime_error, throw std::runtime_error("boom")); }));
 });
 
 KAP_TEST("harness: KAP_ASSERT_THROWS fails when nothing is thrown")
@@ -131,18 +132,16 @@ KAP_TEST("harness: KAP_ASSERT_THROWS fails when nothing is thrown")
 
 KAP_TEST("harness: KAP_ASSERT_THROWS fails when a different exception is thrown")
 {
-    KAP_ASSERT(assertion_failed([] {
-        KAP_ASSERT_THROWS(std::out_of_range, throw std::runtime_error("wrong type"));
-    }));
+    KAP_ASSERT(assertion_failed(
+        [] { KAP_ASSERT_THROWS(std::out_of_range, throw std::runtime_error("wrong type")); }));
 });
 
 KAP_TEST("harness: KAP_ASSERT_THROWS catches a derived exception type")
 {
     // std::out_of_range derives from std::logic_error, so catching the base
     // must work — plugins throw diag::Error, which callers catch as such.
-    KAP_ASSERT(!assertion_failed([] {
-        KAP_ASSERT_THROWS(std::logic_error, throw std::out_of_range("derived"));
-    }));
+    KAP_ASSERT(!assertion_failed(
+        [] { KAP_ASSERT_THROWS(std::logic_error, throw std::out_of_range("derived")); }));
 });
 
 // --- Registration ----------------------------------------------------------------

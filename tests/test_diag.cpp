@@ -30,7 +30,7 @@ KAP_TEST("error report carries the severity, location, message, and notes")
     d.notes.push_back("hint: maybe not");
 
     const kap::diag::Error e(std::move(d));
-    const std::string report = e.report();
+    const std::string      report = e.report();
 
     KAP_ASSERT(report.find("kap: error: kap.toml:1:2: boom") != std::string::npos);
     KAP_ASSERT(report.find("hint: maybe not") != std::string::npos);

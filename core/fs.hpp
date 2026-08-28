@@ -32,7 +32,7 @@ namespace fs
 
 // Hard caps from design doc §7. Keep them together so a security review can
 // confirm the bounds in seconds.
-inline constexpr std::size_t kMaxReadBytes   = 1u << 20;   // 1 MiB
+inline constexpr std::size_t kMaxReadBytes   = 1u << 20; // 1 MiB
 inline constexpr std::size_t kMaxGlobResults = 10000;
 
 bool exists(const std::filesystem::path& path);
@@ -98,14 +98,14 @@ inline bool match_wildcard(std::string_view pattern, std::string_view text)
     // least as good as any earlier choice, so a single remembered position is
     // enough. That makes the algorithm O(pattern * text) worst case and O(n)
     // in practice, with no recursion at all.
-    std::size_t p = 0;              // cursor into pattern
-    std::size_t t = 0;              // cursor into text
-    std::size_t star = std::string_view::npos;   // index of the last '*' seen
-    std::size_t star_text = 0;      // where that '*' started matching
+    std::size_t p         = 0;                      // cursor into pattern
+    std::size_t t         = 0;                      // cursor into text
+    std::size_t star      = std::string_view::npos; // index of the last '*' seen
+    std::size_t star_text = 0;                      // where that '*' started matching
 
     while (t < text.size()) {
         if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
-            ++p;   // literal or single-character match
+            ++p; // literal or single-character match
             ++t;
         } else if (p < pattern.size() && pattern[p] == '*') {
             // Remember this star and start it matching the empty string.
@@ -119,7 +119,7 @@ inline bool match_wildcard(std::string_view pattern, std::string_view text)
             ++star_text;
             t = star_text;
         } else {
-            return false;   // mismatch with no star to fall back on
+            return false; // mismatch with no star to fall back on
         }
     }
 
@@ -134,8 +134,8 @@ inline std::vector<std::string> glob(const std::filesystem::path& dir, std::stri
 {
     std::vector<std::string> results;
 
-    std::error_code ec;
-    std::filesystem::directory_iterator it(dir, ec);
+    std::error_code                           ec;
+    std::filesystem::directory_iterator       it(dir, ec);
     const std::filesystem::directory_iterator end;
     for (; !ec && it != end && results.size() < kMaxGlobResults; it.increment(ec)) {
         const std::string name = it->path().filename().string();
@@ -152,7 +152,7 @@ inline std::vector<std::string> glob(const std::filesystem::path& dir, std::stri
 
 inline bool is_within(const std::filesystem::path& root, const std::filesystem::path& path)
 {
-    std::error_code ec;
+    std::error_code             ec;
     const std::filesystem::path canonical_root = std::filesystem::weakly_canonical(root, ec);
     if (ec) {
         return false;
@@ -166,10 +166,10 @@ inline bool is_within(const std::filesystem::path& root, const std::filesystem::
     auto root_it = canonical_root.begin();
     for (const auto& component : canonical_path) {
         if (root_it == canonical_root.end()) {
-            return true;   // path continues below root
+            return true; // path continues below root
         }
         if (*root_it != component) {
-            return false;  // a component diverged (../ escape or sibling)
+            return false; // a component diverged (../ escape or sibling)
         }
         ++root_it;
     }
