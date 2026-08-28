@@ -48,24 +48,24 @@ void print_usage(std::ostream& out)
 
 std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 
-int run_plugin_doctor(const kap::cli::GlobalOptions& global,
-                      const std::vector<std::string>& args)
+int run_plugin_doctor(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
     if (!args.empty()) {
         std::cerr << "kap: usage: kap plugin doctor\n";
         return 2;
     }
-    const std::filesystem::path plugin_root = search_root(global) / "plugins";
+    const std::filesystem::path    plugin_root = search_root(global) / "plugins";
     const std::vector<std::string> plugin_dirs = kap::fs::glob(plugin_root, "*");
-    int failures = 0;
-    int checked = 0;
+    int                            failures    = 0;
+    int                            checked     = 0;
     for (const std::string& plugin_dir : plugin_dirs) {
         const std::filesystem::path source = plugin_root / plugin_dir / "plugin.kpl";
         if (!kap::fs::is_file(source))
             continue;
         ++checked;
         try {
-            const kap::kpl::Plugin plugin = kap::kpl::parse(kap::fs::read_text(source), source.string());
+            const kap::kpl::Plugin plugin =
+                kap::kpl::parse(kap::fs::read_text(source), source.string());
             const std::vector<std::string> errors = kap::kpl::validate(plugin);
             if (errors.empty()) {
                 std::cout << "[PASS] " << plugin_dir << "\n";
@@ -237,8 +237,8 @@ int main(int argc, char** argv)
             return run_config(inv.global, inv.argv);
         }
         if (inv.command == "plugin" && inv.argv.size() >= 1 && inv.argv[0] == "doctor") {
-            return run_plugin_doctor(inv.global,
-                                     std::vector<std::string>(inv.argv.begin() + 1, inv.argv.end()));
+            return run_plugin_doctor(
+                inv.global, std::vector<std::string>(inv.argv.begin() + 1, inv.argv.end()));
         }
 
         std::cerr << "kap: unknown command '" << inv.command << "'\n";
