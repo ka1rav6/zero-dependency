@@ -911,3 +911,95 @@ KAP_TEST("KPL prefers a bound variable over a bare word of the same name")
     KAP_ASSERT_EQ(spec.steps[0].command.size(), static_cast<std::size_t>(3));
     KAP_ASSERT_EQ(spec.steps[0].command[1], std::string("--build"));
 });
+
+// --- Regression tests: schema, records, and assignment ---------------------------
+
+KAP_TEST("KPL schema accepts a negative integer default")
+{
+    // Regression: the lexer emits '-' as its own token, so `-1` reaches the
+    // schema reader as a unary node. Without a case for it the field looked
+    // like it had no default and the whole plugin was rejected.
+    const auto plugin = kap::kpl::parse("schema { retries: int = -1 offset: int = 0 }");
+    const auto fields = kap::kpl::schema(plugin);
+    KAP_ASSERT_EQ(fields.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT(fields[0].default_value.has_value());
+
+    const auto [config, errors] = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT(errors.empty());
+    KAP_ASSERT_EQ(config.at("retries").integer, static_cast<std::int64_t>(-1));
+});
+
+KAP_TEST("KPL schema names the members when an enum default is not one of them")
+{
+    const auto plugin           = kap::kpl::parse("schema { mode: enum { fast, slow } = quick }");
+    const auto [config, errors] = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("'quick'") != std::string::npos);
+    KAP_ASSERT(errors[0].find("fast, slow") != std::string::npos);
+});
+
+KAP_TEST("KPL rejects a duplicate record field")
+{
+    // Silently keeping one would drop the value the author was setting; in a
+    // record step a dropped `cwd` runs the command in the wrong directory.
+    KAP_ASSERT_THROWS(kap::diag::Error,
+                      kap::kpl::parse("command t(project) { step { cmd: [\"x\"], cwd: \"a\", "
+                                      "cwd: \"b\" } }"));
+    KAP_ASSERT_THROWS(kap::diag::Error,
+                      kap::kpl::parse("detect { file_contains { path: \"a\", path: \"b\" } }"));
+});
+
+KAP_TEST("KPL reports duplicate command names")
+{
+    const auto plugin =
+        kap::kpl::parse("manifest { name = \"d\" version = \"1\" api_version = 1 }\n"
+                        "command build(project) { step \"one\" }\n"
+                        "command build(project) { step \"two\" }\n");
+    const auto errors = kap::kpl::validate(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("duplicate command 'build'") != std::string::npos);
+});
+
+KAP_TEST("KPL rejects assignment to a name that was never declared")
+{
+    // `x = ...` updates; `let x = ...` declares. Without the distinction a
+    // misspelled variable silently became a second variable nothing reads.
+    const auto plugin = kap::kpl::parse("command t(project) { cmd = \"x\" step cmd }", "p.kpl");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("undeclared name 'cmd'") != std::string::npos);
+
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "t", project));
+
+    // The design doc's accumulate idiom still works: declare, then update.
+    const auto accumulating = kap::kpl::parse("command t(project, extra) {"
+                                              "  let cmd = [\"cmake\"]"
+                                              "  if true { cmd = cmd + [\"--build\"] }"
+                                              "  cmd = cmd + extra"
+                                              "  step cmd"
+                                              "}");
+    KAP_ASSERT(kap::kpl::type_check(accumulating).empty());
+    const auto spec = kap::kpl::evaluate(accumulating, "t", project, {}, {"out"});
+    KAP_ASSERT_EQ(spec.steps[0].command.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(spec.steps[0].command[2], std::string("out"));
+});
+
+KAP_TEST("KPL index errors point at the subscript")
+{
+    // Regression: the Index node was built with a default-constructed token,
+    // so every out-of-range error reported line 1, column 1.
+    const auto              plugin = kap::kpl::parse("command t(project) {\n"
+                                                     "  let l = [\"a\"]\n"
+                                                     "  step l[4]\n"
+                                                     "}\n",
+                                        "p.kpl");
+    const kap::kpl::Project project{};
+    try {
+        kap::kpl::evaluate(plugin, "t", project);
+        KAP_ASSERT(false);
+    }
+    catch (const kap::diag::Error& error) {
+        KAP_ASSERT_EQ(error.diagnostic().location.line, 3);
+    }
+});

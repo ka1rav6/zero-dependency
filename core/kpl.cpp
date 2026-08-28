@@ -446,7 +446,11 @@ private:
         result.kind  = Expr::Kind::Record;
         result.token = token;
         while (!check(TokenKind::RightBrace) && !at_end()) {
-            result.names.push_back(consume(TokenKind::Identifier, "expected a record field").text);
+            const Token field = consume(TokenKind::Identifier, "expected a record field");
+            if (std::find(result.names.begin(), result.names.end(), field.text) !=
+                result.names.end())
+                fail("duplicate record field '" + field.text + "'", field);
+            result.names.push_back(field.text);
             consume(TokenKind::Colon, "expected ':' after a record field");
             result.children.push_back(directive_list_element());
             if (!match(TokenKind::Comma))
@@ -734,9 +738,13 @@ private:
                 }
                 consume(TokenKind::RightParen, "expected ')' after arguments");
                 result = std::move(next);
-            } else if (match(TokenKind::LeftBracket)) {
+            } else if (check(TokenKind::LeftBracket)) {
+                // Anchor on the '[' so an out-of-range index reports where the
+                // subscript is. The node used to be built with a
+                // default-constructed token, so every such error said 1:1.
                 Expr next;
                 next.kind     = Expr::Kind::Index;
+                next.token    = tokens_[position_++];
                 next.children = {std::move(result), expression()};
                 consume(TokenKind::RightBracket, "expected ']' after index");
                 result = std::move(next);
@@ -842,10 +850,19 @@ private:
         }
         if (match(TokenKind::LeftBrace)) {
             Expr result;
-            result.kind = Expr::Kind::Record;
+            result.kind  = Expr::Kind::Record;
+            result.token = token;
             while (!check(TokenKind::RightBrace) && !at_end()) {
-                result.names.push_back(
-                    consume(TokenKind::Identifier, "expected record field").text);
+                const Token field = consume(TokenKind::Identifier, "expected record field");
+                // A repeated field has no sensible meaning and always means a
+                // mistake. Keeping one of them silently would drop the very
+                // value the author was setting — the record form of `step` is
+                // where this bites, since a dropped `cwd` runs the command in
+                // the wrong directory with nothing to go on.
+                if (std::find(result.names.begin(), result.names.end(), field.text) !=
+                    result.names.end())
+                    fail("duplicate record field '" + field.text + "'", field);
+                result.names.push_back(field.text);
                 consume(TokenKind::Colon, "expected ':' after record field");
                 result.children.push_back(expression());
                 if (!match(TokenKind::Comma))
@@ -983,6 +1000,17 @@ std::vector<SchemaField> schema(const Plugin& plugin)
                     if (field.type == "enum")
                         field.default_value = Value::string_value(value.token.text);
                     break;
+                case Expr::Kind::Unary:
+                    // `retries: int = -1`. The lexer emits '-' as its own
+                    // token, so a negative literal arrives here as a unary
+                    // node. Without this case the field looked like it had no
+                    // default at all and build_config rejected the plugin with
+                    // "requires a default".
+                    if (value.token.kind == TokenKind::Minus && value.children.size() == 1 &&
+                        value.children.front().kind == Expr::Kind::Integer)
+                        field.default_value =
+                            Value::integer_value(-value.children.front().token.integer);
+                    break;
                 case Expr::Kind::List:
                     {
                         std::vector<Value> values;
@@ -1019,10 +1047,22 @@ build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides
         }
         if (!field.default_value)
             errors.push_back("schema field '" + field.name + "' requires a default");
-        else if (!schema_value_matches(*field.default_value, field.type, field.enum_values))
-            errors.push_back("default for schema field '" + field.name + "' has type " +
-                             field.type);
-        else
+        else if (!schema_value_matches(*field.default_value, field.type, field.enum_values)) {
+            // Say which rule was broken. "has type enum" told the author
+            // nothing when the real problem was a default naming a member the
+            // enum does not declare.
+            if (field.type == "enum" && field.default_value->kind == Value::Kind::String) {
+                std::string members;
+                for (const std::string& member : field.enum_values)
+                    members += (members.empty() ? "" : ", ") + member;
+                errors.push_back("default '" + field.default_value->string +
+                                 "' for schema field '" + field.name +
+                                 "' is not one of its members (" + members + ")");
+            } else {
+                errors.push_back("default for schema field '" + field.name + "' must be " +
+                                 field.type);
+            }
+        } else
             result[field.name] = *field.default_value;
     }
     for (const auto& [name, value] : overrides) {
@@ -1611,8 +1651,23 @@ private:
     void statement_check(const Statement& statement)
     {
         switch (statement.kind) {
-            case Statement::Kind::Let:
             case Statement::Kind::Assignment:
+                // `x = ...` updates an existing binding; `let x = ...` creates
+                // one. Requiring the binding to exist turns a misspelled
+                // variable into a diagnostic instead of a silent second
+                // variable that nothing ever reads.
+                //
+                // KPL is flat-scoped, so a `let` inside an `if` body counts as
+                // a binding here even when that branch is not taken at run
+                // time. The interpreter applies the same rule and would fail in
+                // that case, which is a shape no readable plugin writes.
+                if (values_.count(statement.name) == 0)
+                    error("assignment to undeclared name '" + statement.name + "'; use `let " +
+                              statement.name + " = ...` to declare it",
+                          statement.token);
+                values_[statement.name] = expression(statement.expressions.front());
+                return;
+            case Statement::Kind::Let:
                 values_[statement.name] = expression(statement.expressions.front());
                 return;
             case Statement::Kind::Step:
@@ -2311,8 +2366,16 @@ private:
     void statement_run(const Statement& statement)
     {
         switch (statement.kind) {
-            case Statement::Kind::Let:
             case Statement::Kind::Assignment:
+                // Mirror of the type checker: assignment updates, `let`
+                // declares.
+                if (environment_.count(statement.name) == 0)
+                    fail("assignment to undeclared name '" + statement.name + "'; use `let " +
+                             statement.name + " = ...` to declare it",
+                         statement.token);
+                environment_[statement.name] = expression(statement.expressions.front());
+                return;
+            case Statement::Kind::Let:
                 environment_[statement.name] = expression(statement.expressions.front());
                 return;
             case Statement::Kind::Step:
@@ -2658,6 +2721,17 @@ std::vector<std::string> validate(const Plugin& plugin, int supported_api_versio
             }
         }
     }
+    // Two commands with the same name: the first wins and the second is
+    // unreachable. Nothing about that is intentional, and nothing else in the
+    // pipeline would report it.
+    std::vector<std::string> seen;
+    for (const Command& command : plugin.commands) {
+        if (std::find(seen.begin(), seen.end(), command.name) != seen.end())
+            errors.push_back("duplicate command '" + command.name + "'");
+        else
+            seen.push_back(command.name);
+    }
+
     if (!has_name)
         errors.push_back("manifest requires a non-empty string 'name'");
     if (!has_version)
