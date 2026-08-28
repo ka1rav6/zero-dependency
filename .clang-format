@@ -82,8 +82,9 @@ SpaceBeforeParens:
 SpaceAfterCStyleCast: true # `(int) x` not `(int)x`.
 SpaceAfterTemplateKeyword: true # `template <` not `template<`.
 SpaceInEmptyParentheses: false # `f()` not `f( )`.
+SpacesInParentheses: false     # `(x)` not `( x )`.
 SpacesInAngles: false # `vector<int>` not `vector< int >`.
-SpacesInRoundBrackets: false
+SpacesInContainerLiterals: false
 SpaceBeforeAssignmentOperators: true
 SpaceBeforeRangeBasedForLoopColon: true # `for (auto& x : xs)`.
 
