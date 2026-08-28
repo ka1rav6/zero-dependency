@@ -59,10 +59,31 @@ struct Diagnostic
 // Factory helpers keep callers terse and -Wall-clean: because every field is
 // supplied in declaration order, GCC's -Wmissing-field-initializers has
 // nothing to complain about and it reads better than a four-field aggregate.
+//
+// One per severity, so the Severity enum is actually reachable from code
+// rather than requiring callers to fill a Diagnostic in by hand.
 inline Diagnostic
 error(std::string message, Location location = {}, std::vector<std::string> notes = {})
 {
     return Diagnostic{.severity = Severity::Error,
+                      .message  = std::move(message),
+                      .location = std::move(location),
+                      .notes    = std::move(notes)};
+}
+
+inline Diagnostic
+warning(std::string message, Location location = {}, std::vector<std::string> notes = {})
+{
+    return Diagnostic{.severity = Severity::Warning,
+                      .message  = std::move(message),
+                      .location = std::move(location),
+                      .notes    = std::move(notes)};
+}
+
+inline Diagnostic
+note(std::string message, Location location = {}, std::vector<std::string> notes = {})
+{
+    return Diagnostic{.severity = Severity::Note,
                       .message  = std::move(message),
                       .location = std::move(location),
                       .notes    = std::move(notes)};
@@ -105,17 +126,30 @@ private:
 
 inline std::string render_location(const Location& loc)
 {
+    // An unnamed source still deserves its line and column. Substituting a
+    // placeholder name keeps the output in the universal
+    // "<file>:<line>:<col>: <message>" shape that editors and humans already
+    // know how to read, instead of emitting a bare ":2:5".
+    const std::string file = loc.file.empty() ? "<unknown>" : loc.file;
     if (!loc.has_position()) {
-        return loc.file.empty() ? "<unknown>" : loc.file;
+        return file;
     }
-    return loc.file + ":" + std::to_string(loc.line) + ":" + std::to_string(loc.col);
+    return file + ":" + std::to_string(loc.line) + ":" + std::to_string(loc.col);
 }
 
 inline Error::Error(Diagnostic d) : diag_(std::move(d))
 {
     // Compose "<severity>: <message>" plus an optional location prefix and
     // any notes, each on its own line.
-    std::string loc = diag_.location.file.empty() ? "" : render_location(diag_.location) + ": ";
+    //
+    // The location is included whenever there is anything to say: a file name,
+    // a position, or both. Keying this off the file name alone (as it once did)
+    // silently threw away the line and column of every diagnostic raised
+    // against an unnamed source — and toml::parse(text) with no source_name is
+    // an ordinary call, so a config parse error would report "expected a value"
+    // with no hint of where.
+    const bool        has_location = !diag_.location.file.empty() || diag_.location.has_position();
+    const std::string loc          = has_location ? render_location(diag_.location) + ": " : "";
 
     const char* label = diag_.severity == Severity::Error     ? "error"
                         : diag_.severity == Severity::Warning ? "warning"

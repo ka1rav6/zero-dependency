@@ -167,3 +167,37 @@ KAP_TEST("harness: to_string_display renders strings and bools readably")
     KAP_ASSERT_EQ(kap_test::to_string_display(static_cast<const char*>(nullptr)), "(null)");
     KAP_ASSERT_EQ(kap_test::to_string_display(static_cast<std::int64_t>(-7)), "-7");
 });
+
+KAP_TEST("harness: KAP_ASSERT_THROWS accepts std::exception as the expected type")
+{
+    // The fallback clause is `catch (...)` rather than
+    // `catch (const std::exception&)`. With the latter, naming std::exception
+    // as the expected type makes the fallback an earlier handler for it, which
+    // GCC rejects under -Werror=exceptions — so this would not even compile.
+    KAP_ASSERT(!assertion_failed(
+        [] { KAP_ASSERT_THROWS(std::exception, throw std::runtime_error("boom")); }));
+});
+
+KAP_TEST("harness: KAP_ASSERT_THROWS reports a non-standard exception rather than escaping")
+{
+    // An `int` thrown by the expression under test must be classified as a
+    // wrong-type failure, not propagate out and abort the runner.
+    KAP_ASSERT(assertion_failed([] { KAP_ASSERT_THROWS(std::runtime_error, throw 42); }));
+});
+
+KAP_TEST("harness: describe_current_exception names what is in flight")
+{
+    try {
+        throw std::runtime_error("the detail");
+    }
+    catch (...) {
+        KAP_ASSERT_EQ(kap_test::describe_current_exception(), "the detail");
+    }
+
+    try {
+        throw 42;
+    }
+    catch (...) {
+        KAP_ASSERT(kap_test::describe_current_exception().find("not derived") != std::string::npos);
+    }
+});

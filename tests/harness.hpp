@@ -73,6 +73,24 @@ struct AssertionFailure : std::exception
     throw AssertionFailure{std::string(file) + ":" + std::to_string(line) + ": " + detail};
 }
 
+// Describe the exception currently being handled. Must be called from inside a
+// catch block: `throw;` rethrows the in-flight exception so it can be
+// re-classified. Used by KAP_ASSERT_THROWS to report what arrived instead of
+// the expected type — including exceptions that do not derive from
+// std::exception and therefore have no what().
+inline std::string describe_current_exception()
+{
+    try {
+        throw;
+    }
+    catch (const std::exception& e) {
+        return e.what();
+    }
+    catch (...) {
+        return "(an exception not derived from std::exception)";
+    }
+}
+
 // Register a test; used only by the Registrar struct below.
 inline void register_test(std::string name, std::string file, int line, std::function<void()> body)
 {
@@ -178,9 +196,15 @@ template <typename T> std::string to_string_display(const T& v)
 // the test pass even when nothing is thrown. This macro cannot be written
 // wrongly that way.
 //
-// Note the deliberate ordering of the catch clauses: an unrelated exception is
-// reported as its own distinct failure ("threw the wrong type") rather than
-// being counted as success.
+// An exception of an unrelated type is reported as its own distinct failure
+// ("threw the wrong type") rather than being counted as success.
+//
+// The fallback clause is `catch (...)`, not `catch (const std::exception&)`.
+// The latter would be an *earlier handler* for the expected type whenever that
+// type is std::exception itself, which GCC rejects outright under -Werror
+// (-Wexceptions). Catching everything and classifying it through
+// describe_current_exception() keeps the macro usable for any exception type,
+// including ones outside the std hierarchy.
 #define KAP_ASSERT_THROWS(exception_type, expr)                                                    \
     do {                                                                                           \
         bool kap_test_threw = false;                                                               \
@@ -190,12 +214,12 @@ template <typename T> std::string to_string_display(const T& v)
         catch (const exception_type&) {                                                            \
             kap_test_threw = true;                                                                 \
         }                                                                                          \
-        catch (const std::exception& kap_test_other) {                                             \
-            ::kap_test::fail_test(__FILE__,                                                        \
-                                  __LINE__,                                                        \
-                                  std::string("expected '") + #expr + "' to throw " +              \
-                                      #exception_type +                                            \
-                                      " but it threw something else: " + kap_test_other.what());   \
+        catch (...) {                                                                              \
+            ::kap_test::fail_test(                                                                 \
+                __FILE__,                                                                          \
+                __LINE__,                                                                          \
+                std::string("expected '") + #expr + "' to throw " + #exception_type +              \
+                    " but it threw something else: " + ::kap_test::describe_current_exception());  \
         }                                                                                          \
         if (!kap_test_threw) {                                                                     \
             ::kap_test::fail_test(__FILE__,                                                        \
