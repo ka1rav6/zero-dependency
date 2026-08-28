@@ -76,7 +76,10 @@ struct Expr
         Call,
         Member,
         Index,
-        Conditional
+        Conditional,
+        // children = [subject, pattern0, result0, pattern1, result1, ...].
+        // A Name pattern is a bare word (an enum member), not a variable read.
+        Match
     };
     Kind                     kind = Kind::None;
     Token                    token;

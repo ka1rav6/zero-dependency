@@ -432,19 +432,15 @@ private:
             result.body = block().statements;
             return result;
         }
-        if (match_text("match")) {
+        if (check_text("match")) {
+            // `match` is an expression (design doc §5.9 assigns one to a
+            // `let`), so statement position just parses it as one and keeps
+            // the value. Statement::Kind::Match is retained so a reader of the
+            // AST can still see that this line is a match.
             Statement result;
             result.kind  = Statement::Kind::Match;
-            result.token = tokens_[position_ - 1];
+            result.token = peek();
             result.expressions.push_back(expression());
-            consume(TokenKind::LeftBrace, "expected '{' after match expression");
-            while (!check(TokenKind::RightBrace) && !at_end()) {
-                result.expressions.push_back(expression());
-                consume(TokenKind::Arrow, "expected '=>' after match pattern");
-                result.expressions.push_back(expression());
-                consume(TokenKind::Comma, "expected ',' after match arm");
-            }
-            consume(TokenKind::RightBrace, "expected '}' after match arms");
             return result;
         }
         if (match_text("concurrent")) {
@@ -650,9 +646,61 @@ private:
         return result;
     }
 
+    // pattern = literal | IDENT | "none"  (design doc §5.5)
+    //
+    // A bare IDENT is an enum *member*, not a variable read: §5.3 writes
+    // `ninja => "Ninja"` where `ninja` is a value of the `generator` enum and
+    // is never bound to anything. It is kept as a Name node and compared as
+    // its own text.
+    Expr pattern()
+    {
+        const Token token = peek();
+        if (check(TokenKind::String) || check(TokenKind::Integer)) {
+            ++position_;
+            return Expr{
+                check_previous_string() ? Expr::Kind::String : Expr::Kind::Integer, token, {}, {}};
+        }
+        if (check_text("true") || check_text("false")) {
+            ++position_;
+            return Expr{Expr::Kind::Boolean, token, {}, {}};
+        }
+        if (match_text("none"))
+            return Expr{Expr::Kind::None, token, {}, {}};
+        if (match(TokenKind::Identifier))
+            return Expr{Expr::Kind::Name, token, {}, {}};
+        fail("expected a match pattern", token);
+    }
+
+    bool check_previous_string() const
+    {
+        return tokens_[position_ - 1].kind == TokenKind::String;
+    }
+
     Expr primary()
     {
         const Token token = peek();
+        if (match_text("match")) {
+            Expr result;
+            result.kind  = Expr::Kind::Match;
+            result.token = token;
+            // The subject is parsed with binary() rather than expression() so
+            // the '{' that opens the arms cannot be mistaken for the start of
+            // a record literal, and so a trailing `then` belongs to the match
+            // rather than to the subject.
+            result.children.push_back(binary(1));
+            consume(TokenKind::LeftBrace, "expected '{' after the match subject");
+            while (!check(TokenKind::RightBrace) && !at_end()) {
+                result.children.push_back(pattern());
+                consume(TokenKind::Arrow, "expected '=>' after a match pattern");
+                result.children.push_back(expression());
+                if (!match(TokenKind::Comma))
+                    break;
+            }
+            consume(TokenKind::RightBrace, "expected '}' after the match arms");
+            if (result.children.size() < 3)
+                fail("match requires at least one arm", token);
+            return result;
+        }
         if (match_text("if")) {
             Expr result;
             result.kind  = Expr::Kind::Conditional;
@@ -966,8 +1014,11 @@ public:
                 bool                            has_schema_block)
         : errors_(errors), has_schema_block_(has_schema_block)
     {
-        for (const SchemaField& field : fields)
+        for (const SchemaField& field : fields) {
             config_fields_[field.name] = schema_type(field);
+            if (field.type == "enum")
+                config_enums_[field.name] = field.enum_values;
+        }
     }
 
     void command(const Command& command)
@@ -1114,8 +1165,90 @@ private:
                 }
             case Expr::Kind::Call:
                 return call(expr);
+            case Expr::Kind::Match:
+                return match_check(expr);
         }
         return StaticType::Unknown;
+    }
+
+    // Check a match expression and give it a type.
+    //
+    // The arms' result type is the match's type when every arm agrees, and
+    // Unknown otherwise — that is what makes `let gen = match ... { ... }`
+    // followed by `step gen` check properly.
+    //
+    // When the subject is a `config` field declared as an enum, coverage is
+    // checked here: design doc §5.9 promises "exhaustiveness checked when arms
+    // cover enum", and this is the only place that knows both the arms and the
+    // declared member list.
+    StaticType match_check(const Expr& expr)
+    {
+        const Expr&      subject      = expr.children.front();
+        const StaticType subject_type = expression(subject);
+
+        std::vector<std::string> covered;
+        StaticType               result = StaticType::Unknown;
+        bool                     first  = true;
+        bool                     agreed = true;
+
+        for (std::size_t index = 1; index + 1 < expr.children.size(); index += 2) {
+            const Expr& pattern = expr.children[index];
+            if (pattern.kind == Expr::Kind::Name) {
+                // A bare word pattern is an enum member; it only makes sense
+                // against a string-typed subject.
+                if (subject_type != StaticType::String && subject_type != StaticType::Unknown)
+                    error("pattern '" + pattern.token.text +
+                              "' matches a string, but the subject is " +
+                              std::string(type_name(subject_type)),
+                          pattern.token);
+                covered.push_back(pattern.token.text);
+            } else {
+                const StaticType pattern_type = expression(pattern);
+                if (pattern_type != subject_type && pattern_type != StaticType::Unknown &&
+                    subject_type != StaticType::Unknown && pattern_type != StaticType::None)
+                    error("pattern is " + std::string(type_name(pattern_type)) +
+                              " but the subject is " + std::string(type_name(subject_type)),
+                          pattern.token);
+            }
+
+            const StaticType arm = expression(expr.children[index + 1]);
+            if (first) {
+                result = arm;
+                first  = false;
+            } else if (arm != result) {
+                agreed = false;
+            }
+        }
+
+        check_enum_exhaustiveness(subject, covered, expr.token);
+        return agreed ? result : StaticType::Unknown;
+    }
+
+    void check_enum_exhaustiveness(const Expr&                     subject,
+                                   const std::vector<std::string>& covered,
+                                   const Token&                    token)
+    {
+        // Only `config.<field>` subjects can be checked: that is the only
+        // expression whose closed set of values is declared anywhere.
+        if (subject.kind != Expr::Kind::Member ||
+            subject.children.front().kind != Expr::Kind::Name ||
+            subject.children.front().token.text != "config")
+            return;
+        const auto declared = config_enums_.find(subject.token.text);
+        if (declared == config_enums_.end())
+            return;
+
+        std::vector<std::string> missing;
+        for (const std::string& member : declared->second)
+            if (std::find(covered.begin(), covered.end(), member) == covered.end())
+                missing.push_back(member);
+        if (missing.empty())
+            return;
+
+        std::string list;
+        for (const std::string& member : missing)
+            list += (list.empty() ? "" : ", ") + member;
+        error("match on config." + subject.token.text + " does not cover " + list, token);
     }
 
     StaticType binary(const Expr& expr)
@@ -1346,10 +1479,6 @@ private:
                     return;
                 }
             case Statement::Kind::Match:
-                expression(statement.expressions.front());
-                for (std::size_t index = 1; index < statement.expressions.size(); ++index)
-                    expression(statement.expressions[index]);
-                return;
             case Statement::Kind::Concurrent:
                 require_boolean(expression(statement.expressions.front()), statement.token);
                 return;
@@ -1361,10 +1490,11 @@ private:
         }
     }
 
-    std::vector<std::string>&         errors_;
-    bool                              has_schema_block_ = false;
-    std::map<std::string, StaticType> config_fields_;
-    std::map<std::string, StaticType> values_;
+    std::vector<std::string>&                       errors_;
+    bool                                            has_schema_block_ = false;
+    std::map<std::string, StaticType>               config_fields_;
+    std::map<std::string, std::vector<std::string>> config_enums_;
+    std::map<std::string, StaticType>               values_;
 };
 
 } // namespace
@@ -1594,8 +1724,51 @@ private:
                            : expression(expr.children[2]);
             case Expr::Kind::Call:
                 return call(expr);
+            case Expr::Kind::Match:
+                return match_run(expr);
         }
         fail("unsupported expression", expr.token);
+    }
+
+    // `match <subject> { pattern => result, ... }` (design doc §5.9).
+    //
+    // Arms are tried in source order and the first match wins. There is no
+    // catch-all pattern in v1: an unmatched value is an error naming the value
+    // and the file, which is the honest outcome when a plugin adds an enum
+    // member and forgets an arm.
+    Value match_run(const Expr& expr)
+    {
+        const Value subject = expression(expr.children.front());
+        for (std::size_t index = 1; index + 1 < expr.children.size(); index += 2) {
+            if (pattern_matches(expr.children[index], subject))
+                return expression(expr.children[index + 1]);
+        }
+        fail("no match arm covers " + describe(subject), expr.token);
+    }
+
+    // A Name pattern is a bare enum member compared against the subject's
+    // text — `ninja => ...` matches the string "ninja". Everything else is a
+    // literal compared structurally.
+    bool pattern_matches(const Expr& pattern, const Value& subject)
+    {
+        if (pattern.kind == Expr::Kind::Name)
+            return subject.kind == Value::Kind::String && subject.string == pattern.token.text;
+        return equal(expression(pattern), subject);
+    }
+
+    // A short rendering of a value for diagnostics; not a serialization format.
+    static std::string describe(const Value& value)
+    {
+        switch (value.kind) {
+            case Value::Kind::String:
+                return "\"" + value.string + "\"";
+            case Value::Kind::Integer:
+                return std::to_string(value.integer);
+            case Value::Kind::Boolean:
+                return value.boolean ? "true" : "false";
+            default:
+                return kind_name(value.kind);
+        }
     }
 
     Value binary(const Expr& expr)

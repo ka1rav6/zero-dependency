@@ -690,3 +690,105 @@ KAP_TEST("KPL for rejects a non-list at run time")
     project.root = "/tmp";
     KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "dev", project));
 });
+
+// --- Control flow: match (design doc §5.9) ---------------------------------------
+
+KAP_TEST("KPL match is an expression whose arms select a value")
+{
+    // This is design doc §5.3's cmake-cpp generator selection, which could not
+    // even be parsed before: `match` existed only as a statement.
+    const auto plugin =
+        kap::kpl::parse("schema { generator: enum { auto, ninja, make } = auto }\n"
+                        "command build(project, config) {\n"
+                        "  let gen = match config.generator {\n"
+                        "    auto  => if project.tool(\"ninja\") then \"Ninja\" else none,\n"
+                        "    ninja => \"Ninja\",\n"
+                        "    make  => \"Unix Makefiles\",\n"
+                        "  }\n"
+                        "  if gen != none { step \"cmake\" \"-G\" gen }\n"
+                        "}\n");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+
+    kap::kpl::Project project;
+    project.tool = [](std::string_view name) { return name == "ninja"; };
+
+    const auto [defaults, errors] = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT(errors.empty());
+    const auto automatic = kap::kpl::evaluate(plugin, "build", project, defaults);
+    KAP_ASSERT_EQ(automatic.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(automatic.steps[0].command[2], std::string("Ninja"));
+
+    const auto [pinned, pin_errors] =
+        kap::kpl::build_config(plugin, {{"generator", kap::kpl::Value::string_value("make")}});
+    KAP_ASSERT(pin_errors.empty());
+    const auto explicit_make = kap::kpl::evaluate(plugin, "build", project, pinned);
+    KAP_ASSERT_EQ(explicit_make.steps[0].command[2], std::string("Unix Makefiles"));
+});
+
+KAP_TEST("KPL match falls through to a none arm and drops the step")
+{
+    const auto plugin =
+        kap::kpl::parse("schema { generator: enum { auto, ninja } = auto }\n"
+                        "command build(project, config) {\n"
+                        "  let gen = match config.generator {\n"
+                        "    auto  => if project.tool(\"ninja\") then \"Ninja\" else none,\n"
+                        "    ninja => \"Ninja\",\n"
+                        "  }\n"
+                        "  if gen != none { step \"cmake\" \"-G\" gen }\n"
+                        "  step \"cmake\" \"--build\" \"build\"\n"
+                        "}\n");
+    kap::kpl::Project project;
+    project.tool = [](std::string_view) { return false; };
+
+    const auto [defaults, errors] = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT(errors.empty());
+    const auto spec = kap::kpl::evaluate(plugin, "build", project, defaults);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(spec.steps[0].command[1], std::string("--build"));
+});
+
+KAP_TEST("KPL match checks enum exhaustiveness against the schema")
+{
+    const auto plugin = kap::kpl::parse("schema { mode: enum { fast, slow, safe } = fast }\n"
+                                        "command build(project, config) {\n"
+                                        "  step match config.mode { fast => \"-O2\", }\n"
+                                        "}\n");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("does not cover slow, safe") != std::string::npos);
+});
+
+KAP_TEST("KPL match matches literal patterns structurally")
+{
+    const auto              plugin = kap::kpl::parse("command build(project, extra) {"
+                                                     "  step match len(extra) { 0 => \"none\", 1 => \"one\", }"
+                                                     "}");
+    const kap::kpl::Project project{};
+    KAP_ASSERT_EQ(kap::kpl::evaluate(plugin, "build", project, {}, {}).steps[0].command[0],
+                  std::string("none"));
+    KAP_ASSERT_EQ(kap::kpl::evaluate(plugin, "build", project, {}, {"a"}).steps[0].command[0],
+                  std::string("one"));
+});
+
+KAP_TEST("KPL match reports an uncovered value at run time")
+{
+    const auto              plugin = kap::kpl::parse("command build(project, extra) {\n"
+                                                     "  step match len(extra) { 0 => \"none\", }\n"
+                                                     "}\n",
+                                        "plugin.kpl");
+    const kap::kpl::Project project{};
+    try {
+        kap::kpl::evaluate(plugin, "build", project, {}, {"a", "b"});
+        KAP_ASSERT(false);
+    }
+    catch (const kap::diag::Error& error) {
+        KAP_ASSERT(error.report().find("no match arm covers 2") != std::string::npos);
+        KAP_ASSERT(error.report().find("plugin.kpl:2:") != std::string::npos);
+    }
+});
+
+KAP_TEST("KPL match requires at least one arm")
+{
+    KAP_ASSERT_THROWS(kap::diag::Error,
+                      kap::kpl::parse("command build(config) { step match config.mode { } }"));
+});
