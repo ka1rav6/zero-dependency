@@ -99,6 +99,7 @@ add_library(kap_core STATIC
     core/json.cpp
     core/cli.cpp
     core/kpl.cpp
+    core/kapc.cpp
     core/plugin.cpp
 )
 # Let `#include "core/..."` resolve from the repository root for consumers.
@@ -125,6 +126,7 @@ add_executable(
     tests/test_json.cpp
     tests/test_cli.cpp
     tests/test_kpl.cpp
+    tests/test_kapc.cpp
     tests/test_plugin.cpp
     tests/test_version.cpp
 )

@@ -169,6 +169,30 @@ expect_stderr_contains "an unknown flag is a located diagnostic" "<argv>" --bogu
 expect_status "--set without '=' exits 1" 1 --set nope config get x
 expect_status "--root with no value exits 1" 1 config get x --root
 
+# The KPL AST cache (design doc §5.14) must be transparent: the second run
+# reads a .kapc instead of re-parsing, and produces exactly the same results.
+cache_dir="$(mktemp -d)"
+first="$(XDG_CACHE_HOME="$cache_dir" "$kap_bin" plugin test --root "$repo_root" 2>/dev/null)"
+second="$(XDG_CACHE_HOME="$cache_dir" "$kap_bin" plugin test --root "$repo_root" 2>/dev/null)"
+if [ "$first" = "$second" ] && [ -n "$first" ]; then
+    pass "a cached run produces identical results"
+else
+    fail "a cached run produces identical results" "first='$first' second='$second'"
+fi
+if ls "$cache_dir"/kap/ast/*.kapc >/dev/null 2>&1; then
+    pass "plugin test writes .kapc cache entries"
+else
+    fail "plugin test writes .kapc cache entries" "no .kapc under $cache_dir/kap/ast"
+fi
+# A corrupt entry is a cache miss, never a failure.
+for entry in "$cache_dir"/kap/ast/*.kapc; do printf 'garbage' > "$entry"; done
+if XDG_CACHE_HOME="$cache_dir" "$kap_bin" plugin test --root "$repo_root" >/dev/null 2>&1; then
+    pass "a corrupt cache entry falls back to parsing"
+else
+    fail "a corrupt cache entry falls back to parsing" "plugin test failed after corruption"
+fi
+rm -rf "$cache_dir"
+
 # --- malformed config -------------------------------------------------------------
 
 bad_dir="$(mktemp -d)"

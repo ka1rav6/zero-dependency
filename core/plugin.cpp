@@ -15,6 +15,7 @@
 #include "core/diag.hpp"
 #include "core/fs.hpp"
 #include "core/json.hpp"
+#include "core/kapc.hpp"
 #include "core/kpl.hpp"
 
 namespace kap
@@ -238,13 +239,15 @@ std::vector<Located> discover(const std::filesystem::path& root)
     return found;
 }
 
-std::vector<CaseResult> run_tests(const Located& located)
+std::vector<CaseResult> run_tests(const Located& located, const std::filesystem::path& cache)
 {
     std::vector<CaseResult> results;
 
     kpl::Plugin plugin;
     try {
-        plugin = kpl::parse(fs::read_text(located.manifest), located.manifest.string());
+        // Through the AST cache (§5.14) rather than kpl::parse directly, so
+        // the cache is exercised by the same path real commands will use.
+        plugin = kapc::load(located.manifest, cache).plugin;
     }
     catch (const diag::Error& error) {
         results.push_back(failure("<parse>", error.report()));

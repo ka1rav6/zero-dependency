@@ -18,6 +18,7 @@
 #include "core/cli.hpp"
 #include "core/diag.hpp"
 #include "core/fs.hpp"
+#include "core/kapc.hpp"
 #include "core/kpl.hpp"
 #include "core/plugin.hpp"
 #include "core/toml.hpp"
@@ -125,12 +126,19 @@ int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std
         return 1;
     }
 
+    // Load through the KPL AST cache (design doc §5.14). It is transparent —
+    // a cache hit and a fresh parse produce the same AST — so this is purely
+    // about not re-lexing a plugin that has not changed.
+    const std::filesystem::path cache = kap::kapc::cache_directory();
+    if (global.verbose)
+        std::cerr << "kap: AST cache: " << (cache.empty() ? "disabled" : cache.string()) << "\n";
+
     int passed        = 0;
     int failed        = 0;
     int without_cases = 0;
 
     for (const kap::plugin::Located& located : found) {
-        const std::vector<kap::plugin::CaseResult> results = kap::plugin::run_tests(located);
+        const std::vector<kap::plugin::CaseResult> results = kap::plugin::run_tests(located, cache);
         if (results.empty()) {
             ++without_cases;
             std::cout << "[SKIP] " << located.name << " (no test cases)\n";

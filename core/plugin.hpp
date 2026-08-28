@@ -70,7 +70,14 @@ struct CaseResult
 //
 // A plugin that parses but declares no cases returns an empty vector; the
 // caller decides whether that is worth reporting.
-std::vector<CaseResult> run_tests(const Located& plugin);
+//
+// `cache_directory` is the KPL AST cache (design doc §5.14); pass an empty
+// path to bypass it. Bypassing changes nothing observable — a cache hit and a
+// fresh parse produce the same AST — so tests that want to isolate the
+// interpreter can pass {} and tests that want to exercise the cache can point
+// it at a scratch directory.
+std::vector<CaseResult> run_tests(const Located&               plugin,
+                                  const std::filesystem::path& cache_directory = {});
 
 } // namespace plugin
 } // namespace kap
