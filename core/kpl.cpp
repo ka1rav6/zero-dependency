@@ -1323,12 +1323,26 @@ private:
                         iterable != StaticType::ListUnknown && iterable != StaticType::Unknown)
                         error("for loop requires a list, got " + std::string(type_name(iterable)),
                               statement.expressions.front().token);
+                    // Same scoping rule as Evaluator::for_run(): the loop
+                    // variable exists only inside the loop, so a use after it
+                    // is reported here as an unknown name rather than becoming
+                    // a run-time surprise.
+                    const auto                      outer = values_.find(statement.name);
+                    const std::optional<StaticType> shadowed =
+                        outer == values_.end() ? std::nullopt
+                                               : std::optional<StaticType>(outer->second);
+
                     values_[statement.name] =
                         iterable == StaticType::ListString    ? StaticType::String
                         : iterable == StaticType::ListInteger ? StaticType::Integer
                                                               : StaticType::Unknown;
                     for (const Statement& child : statement.body)
                         statement_check(child);
+
+                    if (shadowed)
+                        values_[statement.name] = *shadowed;
+                    else
+                        values_.erase(statement.name);
                     return;
                 }
             case Statement::Kind::Match:
@@ -1796,6 +1810,40 @@ private:
         fail("unknown function '" + name.text + "'", name);
     }
 
+    // `for x in <list> { ... }` — design doc §5.9. Lists only: there are no
+    // numeric ranges in v1, and every list a plugin can reach is host-produced
+    // and already capped (§7), so the loop cannot be driven unboundedly.
+    //
+    // The loop variable is scoped to the loop: whatever `x` meant outside is
+    // restored afterwards. KPL is otherwise flat-scoped — an assignment inside
+    // an `if` body deliberately updates the outer variable, which is how
+    // §5.3's `cmake = cmake + [...]` works — but a loop variable leaking its
+    // final element into the enclosing block is a bug source with no
+    // corresponding use. The type checker applies the same rule.
+    void for_run(const Statement& statement)
+    {
+        const Expr& iterable_expr = statement.expressions.front();
+        const Value iterable      = expression(iterable_expr);
+        if (iterable.kind != Value::Kind::List)
+            fail("for loop requires a list, got " + std::string(kind_name(iterable.kind)),
+                 iterable_expr.token);
+
+        const auto                 outer = environment_.find(statement.name);
+        const std::optional<Value> shadowed =
+            outer == environment_.end() ? std::nullopt : std::optional<Value>(outer->second);
+
+        for (const Value& item : iterable.list) {
+            environment_[statement.name] = item;
+            for (const Statement& child : statement.body)
+                statement_run(child);
+        }
+
+        if (shadowed)
+            environment_[statement.name] = *shadowed;
+        else
+            environment_.erase(statement.name);
+    }
+
     void statement_run(const Statement& statement)
     {
         switch (statement.kind) {
@@ -1834,8 +1882,17 @@ private:
             case Statement::Kind::ReportFreedSpace:
                 spec_.report_freed_space = true;
                 return;
-            default:
-                fail("statement is not supported by the evaluator yet", statement.token);
+            case Statement::Kind::For:
+                for_run(statement);
+                return;
+            case Statement::Kind::Match:
+            case Statement::Kind::Expression:
+                // Evaluated for its effects on the host (a `match` in
+                // statement position is legal per the §5.5 grammar); the
+                // resulting value is discarded.
+                for (const Expr& expr : statement.expressions)
+                    expression(expr);
+                return;
         }
     }
 

@@ -623,3 +623,70 @@ KAP_TEST("host_project resolves tools on PATH without executing them")
     // rather than probed.
     KAP_ASSERT(!project.tool("/bin/sh"));
 });
+
+// --- Control flow: for (design doc §5.9) -----------------------------------------
+
+KAP_TEST("KPL for iterates a list and emits one step per element")
+{
+    const auto        plugin = kap::kpl::parse("command dev(project, config, extra) {"
+                                               "  concurrent true"
+                                               "  for ws in project.glob(\"packages/*\") {"
+                                               "    if project.exists(ws + \"/package.json\") {"
+                                               "      step \"npm\" \"run\" \"dev\" ws"
+                                               "    }"
+                                               "  }"
+                                               "}");
+    kap::kpl::Project project;
+    project.glob = [](std::string_view) {
+        return std::vector<std::string>{"packages/app", "packages/docs", "packages/scratch"};
+    };
+    project.exists = [](std::string_view path) { return path != "packages/scratch/package.json"; };
+
+    const auto spec = kap::kpl::evaluate(plugin, "dev", project);
+    KAP_ASSERT(spec.concurrent);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(spec.steps[0].command[3], std::string("packages/app"));
+    KAP_ASSERT_EQ(spec.steps[1].command[3], std::string("packages/docs"));
+});
+
+KAP_TEST("KPL for over an empty list runs its body zero times")
+{
+    const auto plugin =
+        kap::kpl::parse("command dev(project, extra) { for w in extra { step \"echo\" w } }");
+    const kap::kpl::Project project{};
+    KAP_ASSERT(kap::kpl::evaluate(plugin, "dev", project, {}, {}).steps.empty());
+});
+
+KAP_TEST("KPL scopes the for loop variable to the loop")
+{
+    const auto plugin =
+        kap::kpl::parse("command dev(project, extra) { for w in extra { step w } step w }");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("unknown name 'w'") != std::string::npos);
+
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "dev", project, {}, {"a"}));
+});
+
+KAP_TEST("KPL for restores an outer binding of the same name")
+{
+    const auto              plugin = kap::kpl::parse("command dev(project, extra) {"
+                                                     "  let w = \"outer\""
+                                                     "  for w in extra { step w }"
+                                                     "  step w"
+                                                     "}");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "dev", project, {}, {"a", "b"});
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(spec.steps[2].command[0], std::string("outer"));
+});
+
+KAP_TEST("KPL for rejects a non-list at run time")
+{
+    const auto plugin =
+        kap::kpl::parse("command dev(project) { for c in project.root { step c } }");
+    kap::kpl::Project project;
+    project.root = "/tmp";
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "dev", project));
+});
