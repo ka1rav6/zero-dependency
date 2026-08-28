@@ -93,18 +93,56 @@ KAP_TEST("KPL parser rejects malformed declarations with a location")
 
 KAP_TEST("KPL manifest validation accepts the supported contract")
 {
-    const auto plugin = kap::kpl::parse(
-        "manifest { name = \"demo\" version = \"1.0.0\" api_version = 1 }\n");
+    const auto plugin =
+        kap::kpl::parse("manifest { name = \"demo\" version = \"1.0.0\" api_version = 1 }\n");
     KAP_ASSERT(kap::kpl::validate(plugin).empty());
 });
 
 KAP_TEST("KPL manifest validation reports missing and newer fields")
 {
-    const auto plugin = kap::kpl::parse(
-        "manifest { name = 1 api_version = 2 }\n");
+    const auto plugin = kap::kpl::parse("manifest { name = 1 api_version = 2 }\n");
     const auto errors = kap::kpl::validate(plugin);
     KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(3));
     KAP_ASSERT(errors[0].find("newer") != std::string::npos);
     KAP_ASSERT(errors[1].find("name") != std::string::npos);
     KAP_ASSERT(errors[2].find("version") != std::string::npos);
+});
+
+KAP_TEST("KPL evaluator builds steps from config, project, and extra args")
+{
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                                     " let dir = config.build_dir"
+                                                     " if project.tool(\"ninja\") { step \"ninja\" dir }"
+                                                     " else { step \"make\" dir }"
+                                                     " step [\"test\"] + extra"
+                                                     "}");
+    const kap::kpl::Project project{.root          = "/tmp/project",
+                                    .matched_files = {"CMakeLists.txt"},
+                                    .exists        = {},
+                                    .tool = [](std::string_view name) { return name == "ninja"; }};
+    const auto              spec = kap::kpl::evaluate(plugin,
+                                         "build",
+                                         project,
+                                                      {{"build_dir", kap::kpl::Value::string_value("out")}},
+                                                      {"--release"});
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("ninja"));
+    KAP_ASSERT_EQ(spec.steps[0].command[1], std::string("out"));
+    KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("test"));
+    KAP_ASSERT_EQ(spec.steps[1].command[1], std::string("--release"));
+});
+
+KAP_TEST("KPL evaluator applies concurrent and freed-space modifiers")
+{
+    const auto plugin =
+        kap::kpl::parse("command clean(project, config) { concurrent true step \"rm\" \"-rf\""
+                        " config.build_dir report_freed_space }");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(
+        plugin, "clean", project, {{"build_dir", kap::kpl::Value::string_value("build")}});
+
+    KAP_ASSERT(spec.concurrent);
+    KAP_ASSERT(spec.report_freed_space);
+    KAP_ASSERT_EQ(spec.steps[0].command[2], std::string("build"));
 });
