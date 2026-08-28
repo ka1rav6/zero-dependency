@@ -898,6 +898,7 @@ enum class StaticType
     Integer,
     Boolean,
     ListString,
+    ListInteger,
     ListUnknown,
     Record
 };
@@ -915,6 +916,8 @@ const char* type_name(StaticType type)
             return "boolean";
         case StaticType::ListString:
             return "list<string>";
+        case StaticType::ListInteger:
+            return "list<integer>";
         case StaticType::ListUnknown:
             return "list";
         case StaticType::Record:
@@ -925,10 +928,42 @@ const char* type_name(StaticType type)
     return "unknown";
 }
 
+// Map a schema field's declared type (design doc §5.7) onto the checker's
+// lattice. `enum` members are ordinary strings at run time — the closed set is
+// enforced when the config record is built, not when KPL reads it.
+StaticType schema_type(const SchemaField& field)
+{
+    if (field.type == "str" || field.type == "enum")
+        return StaticType::String;
+    if (field.type == "int")
+        return StaticType::Integer;
+    if (field.type == "bool")
+        return StaticType::Boolean;
+    if (field.type == "list<str>")
+        return StaticType::ListString;
+    if (field.type == "list<int>")
+        return StaticType::ListInteger;
+    return StaticType::Unknown;
+}
+
 class TypeChecker
 {
 public:
-    explicit TypeChecker(std::vector<std::string>& errors) : errors_(errors) {}
+    // `fields` is the plugin's schema block; `has_schema_block` says whether
+    // the plugin declared one at all.
+    //
+    // Knowing the schema is what lets `config.cmake_args` type as list<string>
+    // instead of Unknown, which in turn lets `["cmake"] + config.cmake_args`
+    // keep its element type all the way to the `step` that consumes it.
+    // Without it, every config read poisons the expression it appears in.
+    TypeChecker(std::vector<std::string>&       errors,
+                const std::vector<SchemaField>& fields,
+                bool                            has_schema_block)
+        : errors_(errors), has_schema_block_(has_schema_block)
+    {
+        for (const SchemaField& field : fields)
+            config_fields_[field.name] = schema_type(field);
+    }
 
     void command(const Command& command)
     {
@@ -1006,7 +1041,32 @@ private:
                             return StaticType::String;
                         if (expr.token.text == "matched_files")
                             return StaticType::ListString;
-                        error("unknown project member '" + expr.token.text + "'", expr.token);
+                        // The callable members are resolved in call(); getting
+                        // here means one was used as a bare value.
+                        if (is_project_method(expr.token.text))
+                            error("project." + expr.token.text +
+                                      " is a function; call it with arguments",
+                                  expr.token);
+                        else
+                            error("unknown project member '" + expr.token.text + "'", expr.token);
+                        return StaticType::Unknown;
+                    }
+                    if (base.kind == Expr::Kind::Name && base.token.text == "config") {
+                        // Only a plugin that actually declares a schema gets
+                        // its config keys checked. Without a schema block
+                        // there is no declared surface to check against, so
+                        // reads stay Unknown rather than being reported as
+                        // unknown keys.
+                        if (!has_schema_block_)
+                            return StaticType::Unknown;
+                        const auto field = config_fields_.find(expr.token.text);
+                        if (field == config_fields_.end()) {
+                            error("unknown config key '" + expr.token.text +
+                                      "'; it is not declared in the schema block",
+                                  expr.token);
+                            return StaticType::Unknown;
+                        }
+                        return field->second;
                     }
                     return StaticType::Unknown;
                 }
@@ -1018,6 +1078,8 @@ private:
                         error("list index must be an integer", expr.children[1].token);
                     if (object == StaticType::ListString)
                         return StaticType::String;
+                    if (object == StaticType::ListInteger)
+                        return StaticType::Integer;
                     if (object != StaticType::ListUnknown && object != StaticType::Unknown)
                         error("index access requires a list", expr.token);
                     return StaticType::Unknown;
@@ -1063,18 +1125,59 @@ private:
         }
         if (op == TokenKind::EqualEqual || op == TokenKind::BangEqual)
             return StaticType::Boolean;
-        if (op == TokenKind::Plus &&
-            ((left == StaticType::String && right == StaticType::String) ||
-             (left == StaticType::ListString && right == StaticType::ListString)))
-            return left;
-        if ((left == StaticType::Integer && right == StaticType::Integer) ||
-            left == StaticType::Unknown || right == StaticType::Unknown)
-            return op == TokenKind::Less || op == TokenKind::LessEqual ||
-                           op == TokenKind::Greater || op == TokenKind::GreaterEqual
-                       ? StaticType::Boolean
-                       : StaticType::Integer;
-        error("incompatible operands", expr.token);
+
+        const bool comparison = op == TokenKind::Less || op == TokenKind::LessEqual ||
+                                op == TokenKind::Greater || op == TokenKind::GreaterEqual;
+        const bool unknown = left == StaticType::Unknown || right == StaticType::Unknown;
+
+        // `<` `<=` `>` `>=` are integer-only and always answer a boolean.
+        if (comparison) {
+            if (!unknown && (left != StaticType::Integer || right != StaticType::Integer))
+                error("comparison requires integers, got " + std::string(type_name(left)) +
+                          " and " + std::string(type_name(right)),
+                      expr.token);
+            return StaticType::Boolean;
+        }
+
+        // `+` is overloaded: string concat, list concat, integer addition
+        // (design doc §5.8). Every other arithmetic operator is integers only.
+        if (op == TokenKind::Plus) {
+            if (left == right && (left == StaticType::String || left == StaticType::ListString ||
+                                  left == StaticType::ListInteger || left == StaticType::Integer))
+                return left;
+            // With one side Unknown, the known side is the best available
+            // answer.
+            //
+            // The bug this replaces: the old code fell through to a clause
+            // that returned Integer whenever *either* operand was Unknown, so
+            // `["cmake"] + config.cmake_args` typed as an integer and the
+            // `step` consuming it was rejected with "step arguments must be
+            // strings, got integer" — a false positive on the exact idiom the
+            // design doc writes in §5.3.
+            if (unknown)
+                return left == StaticType::Unknown ? right : left;
+            error("cannot add " + std::string(type_name(left)) + " and " +
+                      std::string(type_name(right)),
+                  expr.token);
+            return StaticType::Unknown;
+        }
+
+        // `-` `*` `/`
+        if (unknown)
+            return StaticType::Integer;
+        if (left == StaticType::Integer && right == StaticType::Integer)
+            return StaticType::Integer;
+        error("arithmetic requires integers, got " + std::string(type_name(left)) + " and " +
+                  std::string(type_name(right)),
+              expr.token);
         return StaticType::Unknown;
+    }
+
+    // The host methods on `project` (design doc §3.4 / §5.8).
+    static bool is_project_method(std::string_view name)
+    {
+        return name == "exists" || name == "read" || name == "glob" || name == "tool" ||
+               name == "env";
     }
 
     void require_boolean(StaticType type, const Token& token)
@@ -1125,12 +1228,22 @@ private:
                     statement_check(child);
                 return;
             case Statement::Kind::For:
-                if (expression(statement.expressions.front()) == StaticType::None)
-                    error("for loop requires a list", statement.expressions.front().token);
-                values_[statement.name] = StaticType::Unknown;
-                for (const Statement& child : statement.body)
-                    statement_check(child);
-                return;
+                {
+                    const StaticType iterable = expression(statement.expressions.front());
+                    // `for` iterates lists only (design doc §5.9: no numeric ranges
+                    // in v1), so the loop variable's type follows the element type.
+                    if (iterable != StaticType::ListString && iterable != StaticType::ListInteger &&
+                        iterable != StaticType::ListUnknown && iterable != StaticType::Unknown)
+                        error("for loop requires a list, got " + std::string(type_name(iterable)),
+                              statement.expressions.front().token);
+                    values_[statement.name] =
+                        iterable == StaticType::ListString    ? StaticType::String
+                        : iterable == StaticType::ListInteger ? StaticType::Integer
+                                                              : StaticType::Unknown;
+                    for (const Statement& child : statement.body)
+                        statement_check(child);
+                    return;
+                }
             case Statement::Kind::Match:
                 expression(statement.expressions.front());
                 for (std::size_t index = 1; index < statement.expressions.size(); ++index)
@@ -1148,6 +1261,8 @@ private:
     }
 
     std::vector<std::string>&         errors_;
+    bool                              has_schema_block_ = false;
+    std::map<std::string, StaticType> config_fields_;
     std::map<std::string, StaticType> values_;
 };
 
@@ -1155,9 +1270,10 @@ private:
 
 std::vector<std::string> type_check(const Plugin& plugin)
 {
-    std::vector<std::string> errors;
+    std::vector<std::string>       errors;
+    const std::vector<SchemaField> fields = schema(plugin);
     for (const Command& command : plugin.commands)
-        TypeChecker{errors}.command(command);
+        TypeChecker{errors, fields, plugin.schema.has_value()}.command(command);
     return errors;
 }
 

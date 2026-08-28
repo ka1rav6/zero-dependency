@@ -336,3 +336,81 @@ KAP_TEST("KPL rejects a command parameter that is not a host value")
     const kap::kpl::Project project{};
     KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "build", project));
 });
+
+// --- Regression tests: static typing ---------------------------------------------
+
+KAP_TEST("KPL type checker keeps the element type across list concatenation")
+{
+    // Regression: `+` used to answer "integer" whenever either operand was
+    // Unknown, so the design doc's own idiom — `["cmake"] + config.cmake_args`
+    // — was rejected with "step arguments must be strings, got integer".
+    const auto plugin = kap::kpl::parse("schema { cmake_args: list<str> = [] }\n"
+                                        "command build(project, config, extra) {\n"
+                                        "  let cmd = [\"cmake\"] + config.cmake_args + extra\n"
+                                        "  step cmd\n"
+                                        "}\n");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+});
+
+KAP_TEST("KPL type checker types config fields from the schema block")
+{
+    const auto plugin = kap::kpl::parse("schema { build_dir: str = \"build\" jobs: int = 4 }\n"
+                                        "command build(project, config) {\n"
+                                        "  step \"make\" config.build_dir\n"
+                                        "  if config.jobs > 1 { step \"parallel\" }\n"
+                                        "}\n");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+});
+
+KAP_TEST("KPL type checker rejects a config key missing from the schema")
+{
+    const auto plugin =
+        kap::kpl::parse("schema { build_dir: str = \"build\" }\n"
+                        "command build(project, config) { step config.buidl_dir }\n");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("buidl_dir") != std::string::npos);
+});
+
+KAP_TEST("KPL type checker leaves config unchecked when a plugin has no schema")
+{
+    // A plugin with no schema block declares no config surface, so there is
+    // nothing to check the read against; it stays Unknown rather than becoming
+    // a false "unknown config key".
+    const auto plugin = kap::kpl::parse("command build(project, config) { step config.anything }");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+});
+
+KAP_TEST("KPL type checker rejects mistyped schema-backed expressions")
+{
+    const auto plugin = kap::kpl::parse("schema { build_dir: str = \"build\" jobs: int = 4 }\n"
+                                        "command build(project, config) {\n"
+                                        "  step \"x\" + config.jobs\n"
+                                        "  if config.build_dir > 1 { step \"y\" }\n"
+                                        "}\n");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT(errors[0].find("cannot add") != std::string::npos);
+    KAP_ASSERT(errors[1].find("comparison requires integers") != std::string::npos);
+});
+
+KAP_TEST("KPL type checker types the loop variable from the list element type")
+{
+    const auto plugin = kap::kpl::parse("schema { jobs: list<int> = [] }\n"
+                                        "command build(project, config, extra) {\n"
+                                        "  for word in extra { step \"echo\" word }\n"
+                                        "  for job in config.jobs { step job }\n"
+                                        "}\n");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("integer") != std::string::npos);
+});
+
+KAP_TEST("KPL type checker rejects iterating a non-list")
+{
+    const auto plugin =
+        kap::kpl::parse("command build(project) { for c in project.root { step c } }");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("for loop requires a list") != std::string::npos);
+});
