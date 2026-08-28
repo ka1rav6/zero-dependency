@@ -297,7 +297,22 @@ Run it directly while iterating:
 ./tests/e2e.sh ./build/kap 0.1.0
 ```
 
-### 5.3 Running everything
+### 5.3 Sanitizers
+
+Most of `kap` is parsers walking buffers by index — precisely the code where an
+off-by-one reads out of bounds and still passes every test. Build with
+AddressSanitizer and UBSan when you touch one:
+
+```bash
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_SANITIZE=ON
+cmake --build build-asan
+ctest --test-dir build-asan --output-on-failure
+```
+
+It costs roughly 2x runtime, which is why it is not the default. The suite is
+expected to be clean under it; if you make it fail, you found a real bug.
+
+### 5.4 Running everything
 
 ```bash
 ./scripts/ci.sh
@@ -420,6 +435,10 @@ cmake --build build
 
 # Format
 clang-format -i core/*.cpp core/*.hpp tests/*.cpp tests/*.hpp
+
+# Sanitizer build (use when touching a parser)
+cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_SANITIZE=ON
+cmake --build build-asan && ctest --test-dir build-asan --output-on-failure
 
 # In the container
 docker compose run --rm dev ./scripts/ci.sh

@@ -64,6 +64,32 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 endif()
 
+# --- Sanitizers ---------------------------------------------------------------
+# KAP_SANITIZE=ON builds with AddressSanitizer + UndefinedBehaviorSanitizer.
+#
+# Worth having as a one-flag option rather than something each contributor
+# reassembles from memory: kap is mostly parsers walking buffers by index, which
+# is exactly the code where an off-by-one reads out of bounds and still passes
+# every test. ASan turns those into loud failures.
+#
+# Off by default (it costs roughly 2x runtime) and never combined with a release
+# build. Use it when touching a parser:
+#
+#     cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_SANITIZE=ON
+#     cmake --build build-asan && ctest --test-dir build-asan --output-on-failure
+option(KAP_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+if(KAP_SANITIZE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # The flags must reach the linker too, or the sanitizer runtime is
+        # never linked in and the instrumentation silently does nothing.
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+        add_link_options(-fsanitize=address,undefined)
+    else()
+        message(WARNING "KAP_SANITIZE is only supported for GCC and Clang; ignoring.")
+    endif()
+endif()
+
 # --- kap_core library ---------------------------------------------------------
 # Shared infrastructure (design doc Milestone 1): TOML parsing + CLI parsing
 # live here as real TUs so the binary and the tests link the same code; the
