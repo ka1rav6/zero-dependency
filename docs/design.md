@@ -940,7 +940,7 @@ diagnostics with line numbers. ✅
 **Goal:** Evaluate `command` blocks and produce `CommandSpec` JSON.
 
 - [x] Schema validation (config record construction)
-- [ ] Type checker for expressions and `step` statements
+- [x] Type checker for expressions and `step` statements
 - [x] Tree-walk interpreter with `project` host object (mocked in tests)
 - [x] `report_freed_space`, `concurrent` modifiers
 - [ ] AST binary cache (`.kapc`)
