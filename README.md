@@ -13,7 +13,7 @@ tool for common tasks (`build`, `test`, `lint`, `run`, ...).
 ```
 CMakeLists.txt       # build system (CMake + Ninja)
 core/                # C++ source (the kap binary + library)
-plugins/             # first-party KPL plugins
+plugins/             # first-party KPL plugins (+ their fixture tests)
 registry/            # plugin index
 docker/              # dev container + entrypoint
 scripts/             # in-docker wrapper, bootstrap, CI
@@ -57,9 +57,20 @@ Run the full pipeline before you commit — if this is green, CI will be:
 
 ### Status
 
-Milestones 0, 1, and 2 are complete, and Milestone 3 has schema validation, the
-KPL type checker, the tree-walk interpreter, and command modifiers in place.
-The remaining Milestone 3 work is the AST cache and `kap plugin test`. The dev
-container, CI, shared infrastructure libraries, KPL front-end, bundled example
-plugins, and `kap plugin doctor` are also in place. See `docs/design.md` §11 for
-the full roadmap.
+Milestones 0 through 3 are complete: the dev container and CI, the shared
+infrastructure libraries (diagnostics, sandboxed filesystem, TOML, JSON, CLI),
+the whole KPL front-end and interpreter, the `.kapc` AST cache, and
+`kap plugin doctor` / `kap plugin test`.
+
+```sh
+kap plugin doctor        # parse, validate, and type-check every plugin
+kap plugin test          # run each plugin's fixture cases
+```
+
+`kap plugin test` evaluates a plugin's command blocks against fixture project
+trees and compares the resulting step lists with committed golden files —
+without executing a single real build tool, so CI needs no ecosystem
+toolchains.
+
+Next up is Milestone 4, the detection engine. See `docs/design.md` §11 for the
+full roadmap.
