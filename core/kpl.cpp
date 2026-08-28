@@ -294,9 +294,9 @@ public:
             if (keyword.text == "manifest")
                 plugin.manifest = block();
             else if (keyword.text == "detect")
-                plugin.detect = block();
+                plugin.detect = directive_block();
             else if (keyword.text == "requires")
-                plugin.requires_block = block();
+                plugin.requires_block = directive_block();
             else if (keyword.text == "schema")
                 plugin.schema = block();
             else if (keyword.text == "command")
@@ -372,6 +372,106 @@ private:
             result.statements.push_back(statement());
         consume(TokenKind::RightBrace, "expected '}'");
         return result;
+    }
+
+    // `detect` and `requires` hold *directives*, not statements.
+    //
+    // The generic statement parser gets both blocks wrong. `file_exists
+    // "CMakeLists.txt"` parses as two unrelated statements — a bare name and a
+    // stray string — so a Milestone-4 rule extractor would have nothing to
+    // read. Worse, `optional [ninja, make, ccache]` is a hard parse error,
+    // because a '[' after an identifier is an index expression and an index
+    // takes exactly one subscript. The design doc writes both forms (§3.2,
+    // §5.3, §5.10), so neither is optional.
+    //
+    // A directive is `IDENT` followed by zero or more arguments, where an
+    // argument is a literal, a list, or a record — never a bare identifier.
+    // That restriction is what makes the block unambiguous: an identifier at
+    // argument position always starts the next directive. Bare identifiers
+    // inside a list are read as strings, so `any_of [cmake]` means the tool
+    // named "cmake" without demanding quotes the design doc does not write.
+    Block directive_block()
+    {
+        consume(TokenKind::LeftBrace, "expected '{'");
+        Block result;
+        while (!check(TokenKind::RightBrace) && !at_end()) {
+            Statement directive;
+            directive.kind  = Statement::Kind::Directive;
+            directive.token = peek();
+            directive.name  = consume(TokenKind::Identifier, "expected a directive name").text;
+            while (starts_directive_argument())
+                directive.expressions.push_back(directive_argument());
+            result.statements.push_back(std::move(directive));
+        }
+        consume(TokenKind::RightBrace, "expected '}'");
+        return result;
+    }
+
+    bool starts_directive_argument() const
+    {
+        switch (peek().kind) {
+            case TokenKind::String:
+            case TokenKind::Integer:
+            case TokenKind::LeftBracket:
+            case TokenKind::LeftBrace:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    Expr directive_argument()
+    {
+        const Token token = peek();
+        if (match(TokenKind::String))
+            return Expr{Expr::Kind::String, token, {}, {}};
+        if (match(TokenKind::Integer))
+            return Expr{Expr::Kind::Integer, token, {}, {}};
+        if (match(TokenKind::LeftBracket)) {
+            Expr result;
+            result.kind  = Expr::Kind::List;
+            result.token = token;
+            if (!check(TokenKind::RightBracket)) {
+                do
+                    result.children.push_back(directive_list_element());
+                while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::RightBracket, "expected ']' after a directive list");
+            return result;
+        }
+        // A record argument, e.g.
+        //   file_contains { path: "package.json", pattern: "\"workspaces\"" }
+        consume(TokenKind::LeftBrace, "expected a directive argument");
+        Expr result;
+        result.kind  = Expr::Kind::Record;
+        result.token = token;
+        while (!check(TokenKind::RightBrace) && !at_end()) {
+            result.names.push_back(consume(TokenKind::Identifier, "expected a record field").text);
+            consume(TokenKind::Colon, "expected ':' after a record field");
+            result.children.push_back(directive_list_element());
+            if (!match(TokenKind::Comma))
+                break;
+        }
+        consume(TokenKind::RightBrace, "expected '}' after a record argument");
+        return result;
+    }
+
+    // Elements inside a directive list or record: literals, plus bare
+    // identifiers read as their own text.
+    Expr directive_list_element()
+    {
+        const Token token = peek();
+        if (match(TokenKind::String))
+            return Expr{Expr::Kind::String, token, {}, {}};
+        if (match(TokenKind::Integer))
+            return Expr{Expr::Kind::Integer, token, {}, {}};
+        if (check_text("true") || check_text("false")) {
+            ++position_;
+            return Expr{Expr::Kind::Boolean, token, {}, {}};
+        }
+        if (match(TokenKind::Identifier))
+            return Expr{Expr::Kind::String, token, {}, {}};
+        fail("expected a literal or a name", token);
     }
 
     Command command(const Token& token)
@@ -1283,6 +1383,23 @@ private:
             if (left == right && (left == StaticType::String || left == StaticType::ListString ||
                                   left == StaticType::ListInteger || left == StaticType::Integer))
                 return left;
+            // List concatenation where one side's element type is not known
+            // statically. This happens for an ordinary literal such as
+            // `["-G", gen]` when `gen` came from a match whose arms disagree,
+            // and refusing it would rule out design doc §5.3's generator
+            // selection. The known side wins so the element type survives.
+            const bool left_list  = is_list(left);
+            const bool right_list = is_list(right);
+            if (left_list && right_list) {
+                if (left == StaticType::ListUnknown)
+                    return right;
+                if (right == StaticType::ListUnknown)
+                    return left;
+                error("cannot concatenate " + std::string(type_name(left)) + " and " +
+                          std::string(type_name(right)),
+                      expr.token);
+                return StaticType::ListUnknown;
+            }
             // With one side Unknown, the known side is the best available
             // answer.
             //
@@ -1309,6 +1426,12 @@ private:
                   std::string(type_name(right)),
               expr.token);
         return StaticType::Unknown;
+    }
+
+    static bool is_list(StaticType type)
+    {
+        return type == StaticType::ListString || type == StaticType::ListInteger ||
+               type == StaticType::ListUnknown;
     }
 
     // The host methods on `project` (design doc §3.4 / §5.8).
@@ -1541,6 +1664,10 @@ private:
             case Statement::Kind::Expression:
                 for (const Expr& expr : statement.expressions)
                     expression(expr);
+                return;
+            case Statement::Kind::Directive:
+                // Directives only appear in `detect` and `requires`, which the
+                // command type checker never walks.
                 return;
         }
     }
@@ -2208,6 +2335,10 @@ private:
             case Statement::Kind::For:
                 for_run(statement);
                 return;
+            case Statement::Kind::Directive:
+                // Unreachable: directives live in `detect`/`requires`, which
+                // are never evaluated as a command body.
+                fail("a directive cannot appear inside a command", statement.token);
             case Statement::Kind::Match:
             case Statement::Kind::Expression:
                 // Evaluated for its effects on the host (a `match` in

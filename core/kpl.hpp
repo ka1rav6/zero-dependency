@@ -99,7 +99,12 @@ struct Statement
         For,
         Match,
         Concurrent,
-        ReportFreedSpace
+        ReportFreedSpace,
+        // A declaration inside `detect` or `requires`: a directive name plus
+        // its arguments, e.g. `file_exists "CMakeLists.txt"` or
+        // `optional [ninja, make]`. `name` holds the directive; `expressions`
+        // holds the arguments.
+        Directive
     };
     Kind                     kind = Kind::Expression;
     Token                    token;
