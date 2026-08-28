@@ -57,9 +57,9 @@ Run the full pipeline before you commit — if this is green, CI will be:
 
 ### Status
 
-Milestones 0, 1, and 2 are complete: the dev container, CI, shared
-infrastructure libraries (diagnostics, argv, sandboxed filesystem, TOML, CLI),
-KPL front-end, bundled example plugins, and `kap plugin doctor` are in place.
-`kap config get` reads a project's `kap.toml`, while doctor validates plugin
-manifests and reports parser locations. See `docs/design.md` §11 for the full
-roadmap.
+Milestones 0, 1, and 2 are complete, and Milestone 3 has schema validation, the
+KPL type checker, the tree-walk interpreter, and command modifiers in place.
+The remaining Milestone 3 work is the AST cache and `kap plugin test`. The dev
+container, CI, shared infrastructure libraries, KPL front-end, bundled example
+plugins, and `kap plugin doctor` are also in place. See `docs/design.md` §11 for
+the full roadmap.
