@@ -76,7 +76,7 @@ These rules apply without fail, in every change, no exceptions:
 
 ## 8. Development environment
 
-- Provide an easily reproducible dev environment (e.g. via **Docker**).
+- Provide an easily reproducible dev environment (via **Docker** only).
 - The container must be usable for building, testing, and running the project.
 - Document the recommended local build/test commands here (see below).
 
