@@ -60,20 +60,21 @@ target_link_libraries(kap_tests PRIVATE kap_core)
 
 add_test(NAME kap_unit_tests COMMAND kap_tests)
 
-# End-to-end smoke test: the built binary must print the version banner. The
-# regex is built from PROJECT_VERSION so it can never drift from the code.
+# End-to-end tests: everything the unit tests structurally cannot reach —
+# exit codes, stdout/stderr separation, and argument dispatch through the real
+# binary. tests/e2e.sh is a POSIX-shell driver (no bats/shunit2, per AGENTS.md
+# §6) that takes the binary's path as its only argument.
+add_test(
+    NAME kap_e2e
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e.sh" "$<TARGET_FILE:kap>"
+)
+
+# Milestone-0 contract, kept as its own test so a broken version banner is
+# reported independently of the wider e2e run. The regex is built from
+# PROJECT_VERSION, which CMake reads out of core/version.hpp above, so the
+# assertion cannot drift from the code.
 add_test(NAME kap_version_smoke COMMAND kap --version)
 set_tests_properties(
     kap_version_smoke
     PROPERTIES PASS_REGULAR_EXPRESSION "kap ${PROJECT_VERSION}"
-)
-
-# Milestone-1 exit-criteria smoke test: `kap config get` reads a TOML file.
-# The command runs under CMake's working directory, so we point it at the
-# fixture via --root.
-add_test(NAME kap_config_get_smoke
-         COMMAND kap config get --root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/config" server.host)
-set_tests_properties(
-    kap_config_get_smoke
-    PROPERTIES PASS_REGULAR_EXPRESSION "localhost"
 )
