@@ -132,3 +132,207 @@ KAP_TEST("is_within accepts paths under the root and rejects escapes")
     std::filesystem::remove_all(sibling);
     std::filesystem::remove_all(dir);
 });
+// --- Wildcard matching: correctness and cost -------------------------------------
+
+KAP_TEST("match_wildcard handles multiple and adjacent stars")
+{
+    KAP_ASSERT(kap::fs::match_wildcard("*test*", "my_test_file"));
+    KAP_ASSERT(kap::fs::match_wildcard("**", "anything"));
+    KAP_ASSERT(kap::fs::match_wildcard("a**b", "ab"));
+    KAP_ASSERT(kap::fs::match_wildcard("a**b", "axxxb"));
+    KAP_ASSERT(kap::fs::match_wildcard("*.tar.gz", "archive.tar.gz"));
+    KAP_ASSERT(!kap::fs::match_wildcard("*.tar.gz", "archive.tar.bz2"));
+});
+
+KAP_TEST("match_wildcard anchors both ends of the pattern")
+{
+    // Unlike a substring search, "abc" must match only "abc".
+    KAP_ASSERT(kap::fs::match_wildcard("abc", "abc"));
+    KAP_ASSERT(!kap::fs::match_wildcard("abc", "xabc"));
+    KAP_ASSERT(!kap::fs::match_wildcard("abc", "abcx"));
+    KAP_ASSERT(kap::fs::match_wildcard("*abc", "xabc"));
+    KAP_ASSERT(kap::fs::match_wildcard("abc*", "abcx"));
+});
+
+KAP_TEST("match_wildcard backtracks correctly when a star overshoots")
+{
+    // The greedy-then-backtrack path: the star must first try to swallow the
+    // whole string, then give characters back until the tail fits.
+    KAP_ASSERT(kap::fs::match_wildcard("*.xcodeproj", "MyApp.xcodeproj"));
+    KAP_ASSERT(kap::fs::match_wildcard("*a*b", "xxaxxb"));
+    KAP_ASSERT(!kap::fs::match_wildcard("*a*b", "xxaxx"));
+    KAP_ASSERT(kap::fs::match_wildcard("a*a*a", "aaa"));
+    KAP_ASSERT(!kap::fs::match_wildcard("a*a*a", "aa"));
+});
+
+KAP_TEST("a star can match trailing text after the last literal")
+{
+    KAP_ASSERT(kap::fs::match_wildcard("Cargo*", "Cargo.toml"));
+    KAP_ASSERT(kap::fs::match_wildcard("?*", "x"));
+    KAP_ASSERT(!kap::fs::match_wildcard("?*", ""));
+});
+
+KAP_TEST("a pathological pattern still matches in linear time")
+{
+    // Regression guard for the old recursive matcher, which explored every
+    // way of splitting the text between stars. At 24 characters it already
+    // took ~33 ms; each extra character roughly doubled that, so a plugin
+    // could have hung kap with one glob. The iterative matcher is O(n*m).
+    //
+    // No timing assertion (that would be flaky on a loaded CI box) — the test
+    // simply cannot complete at all if the exponential behaviour returns.
+    const std::string text(2048, 'a');
+    KAP_ASSERT(!kap::fs::match_wildcard("*a*a*a*a*a*a*a*a*a*a*a*a*b", text));
+    KAP_ASSERT(kap::fs::match_wildcard("*a*a*a*a*a*a*a*a*a*a*a*a*a", text));
+});
+
+KAP_TEST("a deeply starred pattern does not recurse into a stack overflow")
+{
+    // The old implementation recursed once per star; 10 000 of them would
+    // exhaust the stack. The iterative version uses O(1) space.
+    const std::string pattern(10000, '*');
+    KAP_ASSERT(kap::fs::match_wildcard(pattern, "anything at all"));
+});
+
+// --- read_text caps --------------------------------------------------------------
+
+KAP_TEST("read_text enforces its cap on the stream, not on a stat() result")
+{
+    // /dev/zero reports a size of 0 but yields bytes forever. Sizing the read
+    // off stat() and then slurping the stream (the original implementation)
+    // never terminates. The cap must be enforced while reading.
+    //
+    // Guarded by exists() so the test is a no-op on a platform without it.
+    if (std::filesystem::exists("/dev/zero")) {
+        KAP_ASSERT_THROWS(kap::diag::Error, kap::fs::read_text("/dev/zero", 1024));
+    }
+});
+
+KAP_TEST("read_text accepts a file of exactly the cap size")
+{
+    // Off-by-one guard: the cap is a maximum, not an exclusive bound.
+    const std::filesystem::path dir = scratch("exact_cap");
+    const std::filesystem::path file = dir / "exact.txt";
+    write_file(file, std::string(64, 'x'));
+
+    KAP_ASSERT_EQ(kap::fs::read_text(file, 64).size(), static_cast<std::size_t>(64));
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::fs::read_text(file, 63));
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("read_text reads an empty file as an empty string")
+{
+    const std::filesystem::path dir = scratch("empty_read");
+    const std::filesystem::path file = dir / "empty.txt";
+    write_file(file, "");
+
+    KAP_ASSERT_EQ(kap::fs::read_text(file), "");
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("read_text preserves embedded NUL bytes and binary content")
+{
+    // Reads are byte-exact: a length-based read must not stop at a NUL the way
+    // a C-string copy would.
+    const std::filesystem::path dir = scratch("binary_read");
+    const std::filesystem::path file = dir / "bin.dat";
+    const std::string payload = std::string("a\0b\0c", 5);
+    write_file(file, payload);
+
+    const std::string got = kap::fs::read_text(file);
+    KAP_ASSERT_EQ(got.size(), static_cast<std::size_t>(5));
+    KAP_ASSERT_EQ(got, payload);
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("read_text rejects a directory with a distinct message")
+{
+    const std::filesystem::path dir = scratch("read_dir");
+    try {
+        (void)kap::fs::read_text(dir);
+        KAP_ASSERT(false);   // unreachable
+    } catch (const kap::diag::Error& e) {
+        KAP_ASSERT(e.report().find("not a regular file") != std::string::npos);
+    }
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("read_text says 'no such file' for a missing path")
+{
+    try {
+        (void)kap::fs::read_text(std::filesystem::temp_directory_path() / "kap_definitely_missing");
+        KAP_ASSERT(false);   // unreachable
+    } catch (const kap::diag::Error& e) {
+        KAP_ASSERT(e.report().find("no such file") != std::string::npos);
+    }
+});
+
+// --- glob ------------------------------------------------------------------------
+
+KAP_TEST("glob lists directories as well as files")
+{
+    // Detection rules use dir_exists-style checks (design doc §3.2), so glob
+    // must not silently filter out directory entries.
+    const std::filesystem::path dir = scratch("glob_dirs");
+    std::filesystem::create_directories(dir / "sub.d");
+    write_file(dir / "file.d", "x");
+
+    const std::vector<std::string> hits = kap::fs::glob(dir, "*.d");
+    KAP_ASSERT_EQ(hits.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(hits[0], "file.d");
+    KAP_ASSERT_EQ(hits[1], "sub.d");
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("glob is not recursive")
+{
+    // Only entries directly under `dir` are considered; a nested match must
+    // not appear, or a plugin's marker-file rule could fire from a vendored
+    // subdirectory.
+    const std::filesystem::path dir = scratch("glob_flat");
+    std::filesystem::create_directories(dir / "nested");
+    write_file(dir / "nested" / "Cargo.toml", "x");
+
+    KAP_ASSERT(kap::fs::glob(dir, "Cargo.toml").empty());
+
+    std::filesystem::remove_all(dir);
+});
+
+// --- is_within -------------------------------------------------------------------
+
+KAP_TEST("is_within treats the root itself as inside")
+{
+    const std::filesystem::path dir = scratch("within_self");
+    KAP_ASSERT(kap::fs::is_within(dir, dir));
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("is_within rejects a ../ escape even when it is spelled indirectly")
+{
+    const std::filesystem::path dir = scratch("within_escape");
+    std::filesystem::create_directories(dir / "sub");
+
+    // Textually below the root, but resolves to the parent — the traversal
+    // attack design doc §7 exists to stop.
+    KAP_ASSERT(!kap::fs::is_within(dir, dir / "sub" / ".." / ".." / "elsewhere"));
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("is_within is not fooled by a sibling with the root as a name prefix")
+{
+    // "/tmp/kap_root" and "/tmp/kap_root_evil" share a textual prefix but are
+    // different directories; a naive string comparison would accept the second.
+    const std::filesystem::path dir = scratch("prefix");
+    const std::filesystem::path sibling = dir.string() + "_evil";
+    std::filesystem::create_directories(sibling);
+
+    KAP_ASSERT(!kap::fs::is_within(dir, sibling));
+
+    std::filesystem::remove_all(sibling);
+    std::filesystem::remove_all(dir);
+});
