@@ -6,6 +6,8 @@
 // stream; the parser in kpl.cpp consumes the same public token types.
 
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,15 +49,86 @@ enum class TokenKind
 
 struct Token
 {
-    TokenKind   kind = TokenKind::End;
-    std::string text;
+    TokenKind    kind = TokenKind::End;
+    std::string  text;
     std::int64_t integer = 0;
-    int          line = 1;
-    int          column = 1;
+    int          line    = 1;
+    int          column  = 1;
 };
 
-// Tokenize one KPL source file. Keywords remain Identifier tokens so adding a
-// keyword never changes the lexical contract; the parser compares text.
 std::vector<Token> lex(std::string_view source, std::string source_name = {});
+
+struct Expr
+{
+    enum class Kind
+    {
+        String,
+        Integer,
+        Boolean,
+        None,
+        Name,
+        List,
+        Record,
+        Unary,
+        Binary,
+        Call,
+        Member,
+        Index,
+        Conditional
+    };
+    Kind                     kind = Kind::None;
+    Token                    token;
+    std::vector<Expr>        children;
+    std::vector<std::string> names;
+};
+
+struct Statement
+{
+    enum class Kind
+    {
+        Assignment,
+        Let,
+        Expression,
+        Step,
+        If,
+        For,
+        Match,
+        Concurrent,
+        ReportFreedSpace
+    };
+    Kind                     kind = Kind::Expression;
+    Token                    token;
+    std::string              name;
+    std::vector<std::string> names;
+    std::vector<Expr>        expressions;
+    std::vector<Statement>   body;
+    std::vector<Statement>   otherwise;
+};
+
+struct Block
+{
+    std::vector<Statement> statements;
+};
+
+struct Command
+{
+    std::string              name;
+    std::vector<std::string> parameters;
+    Block                    body;
+    Token                    token;
+};
+
+struct Plugin
+{
+    std::optional<Block> manifest;
+    std::optional<Block> detect;
+    std::optional<Block> requires_block;
+    std::optional<Block> schema;
+    std::vector<Command> commands;
+};
+
+// Parse one plugin into an AST. Keywords are represented by identifier tokens
+// and validated here, keeping lexical evolution separate from the grammar.
+Plugin parse(std::string_view source, std::string source_name = {});
 
 } // namespace kap::kpl
