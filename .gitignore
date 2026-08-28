@@ -1,3 +1,7 @@
+build/
+cmake-build-debug/
+temp/
+
 # Prerequisites
 *.d
 
