@@ -149,16 +149,17 @@ KAP_TEST("KPL evaluator applies concurrent and freed-space modifiers")
 
 KAP_TEST("KPL schema builds typed defaults and accepts overrides")
 {
-    const auto plugin = kap::kpl::parse(
-        "schema { mode: enum { auto, ninja } = auto retries: int = 2 "
-        "release: bool = false args: list<str> = [] }");
+    const auto plugin =
+        kap::kpl::parse("schema { mode: enum { auto, ninja } = auto retries: int = 2 "
+                        "release: bool = false args: list<str> = [] }");
     const auto fields = kap::kpl::schema(plugin);
     KAP_ASSERT_EQ(fields.size(), static_cast<std::size_t>(4));
     KAP_ASSERT_EQ(fields[3].type, "list<str>");
 
-    const auto [config, errors] = kap::kpl::build_config(
-        plugin, {{"mode", kap::kpl::Value::string_value("ninja")},
-                 {"release", kap::kpl::Value::boolean_value(true)}});
+    const auto [config, errors] =
+        kap::kpl::build_config(plugin,
+                               {{"mode", kap::kpl::Value::string_value("ninja")},
+                                {"release", kap::kpl::Value::boolean_value(true)}});
     KAP_ASSERT(errors.empty());
     KAP_ASSERT_EQ(config.at("mode").string, "ninja");
     KAP_ASSERT_EQ(config.at("retries").integer, static_cast<std::int64_t>(2));
@@ -168,9 +169,10 @@ KAP_TEST("KPL schema builds typed defaults and accepts overrides")
 KAP_TEST("KPL schema rejects unknown and incorrectly typed config")
 {
     const auto plugin = kap::kpl::parse("schema { release: bool = false }");
-    const auto [config, errors] = kap::kpl::build_config(
-        plugin, {{"release", kap::kpl::Value::string_value("yes")},
-                 {"unknown", kap::kpl::Value::integer_value(1)}});
+    const auto [config, errors] =
+        kap::kpl::build_config(plugin,
+                               {{"release", kap::kpl::Value::string_value("yes")},
+                                {"unknown", kap::kpl::Value::integer_value(1)}});
     KAP_ASSERT(config.at("release").boolean == false);
     KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(2));
     KAP_ASSERT(errors[0].find("unknown config key") != std::string::npos ||
@@ -179,22 +181,91 @@ KAP_TEST("KPL schema rejects unknown and incorrectly typed config")
 
 KAP_TEST("KPL type checker accepts valid command expressions")
 {
-    const auto plugin = kap::kpl::parse(
-        "command build(project, config, extra) {"
-        " let args = [\"cmake\"] + extra"
-        " if project.tool(\"ninja\") { step args }"
-        " concurrent config.release"
-        "}");
+    const auto plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                        " let args = [\"cmake\"] + extra"
+                                        " if project.tool(\"ninja\") { step args }"
+                                        " concurrent config.release"
+                                        "}");
     KAP_ASSERT(kap::kpl::type_check(plugin).empty());
 });
 
 KAP_TEST("KPL type checker rejects invalid conditions and step values")
 {
-    const auto plugin = kap::kpl::parse(
-        "command broken(config) { if \"yes\" { step 42 } concurrent 1 }");
+    const auto plugin =
+        kap::kpl::parse("command broken(config) { if \"yes\" { step 42 } concurrent 1 }");
     const auto errors = kap::kpl::type_check(plugin);
     KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(3));
     KAP_ASSERT(errors[0].find("boolean") != std::string::npos);
     KAP_ASSERT(errors[1].find("strings") != std::string::npos);
     KAP_ASSERT(errors[2].find("boolean") != std::string::npos);
+});
+
+// --- Regression tests: operator semantics ----------------------------------------
+
+KAP_TEST("KPL evaluator returns a value from non-short-circuiting && and ||")
+{
+    // Regression: `&&`/`||` used to return early only on the short-circuit
+    // path and then fall through to the arithmetic ladder, so every logical
+    // expression that actually had to look at its right operand died with
+    // "incompatible operands".
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                                     " if true && true { step \"both\" }"
+                                                     " if false || true { step \"either\" }"
+                                                     " if true && false { step \"unreachable\" }"
+                                                     "}");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("both"));
+    KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("either"));
+});
+
+KAP_TEST("KPL evaluator short-circuits && and || without evaluating the right side")
+{
+    // `project.tool` is the only observable side effect available here: if the
+    // right operand were evaluated, the missing-tool lookup would still run.
+    // Counting lookups proves the short circuit actually happened.
+    int                     lookups = 0;
+    const auto              plugin  = kap::kpl::parse("command build(project, config, extra) {"
+                                                      " if false && project.tool(\"ninja\") { step \"no\" }"
+                                                      " if true || project.tool(\"ninja\") { step \"yes\" }"
+                                                      "}");
+    const kap::kpl::Project project{
+        .root = "/tmp", .matched_files = {}, .exists = {}, .tool = [&lookups](std::string_view) {
+            ++lookups;
+            return true;
+        }};
+    const auto spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT_EQ(lookups, 0);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+});
+
+KAP_TEST("KPL evaluator rejects non-boolean logical operands")
+{
+    const auto plugin = kap::kpl::parse(
+        "command build(project, config, extra) { if \"yes\" && true { step \"x\" } }");
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "build", project));
+});
+
+KAP_TEST("KPL equality compares lists and records structurally")
+{
+    // Regression: equality used to compare Value's scalar fields side by side,
+    // which never looked at list elements — so any two lists were "equal".
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                                     " if [\"a\"] == [\"b\"] { step \"wrong\" }"
+                                                     " if [\"a\"] == [\"a\"] { step \"same\" }"
+                                                     " if [\"a\"] != [\"a\", \"b\"] { step \"length\" }"
+                                                     " if 1 == \"1\" { step \"crosstype\" }"
+                                                     " if none == none { step \"none\" }"
+                                                     "}");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("same"));
+    KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("length"));
+    KAP_ASSERT_EQ(spec.steps[2].command[0], std::string("none"));
 });

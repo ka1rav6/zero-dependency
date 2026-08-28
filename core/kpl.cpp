@@ -5,9 +5,9 @@
 
 #include "core/kpl.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
-#include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
@@ -473,8 +473,8 @@ private:
             consume(TokenKind::Colon, "expected ':' after field name");
             if (check_text("enum") || check_text("list")) {
                 Expr type;
-                type.kind  = Expr::Kind::Name;
-                type.token = tokens_[position_++];
+                type.kind        = Expr::Kind::Name;
+                type.token       = tokens_[position_++];
                 result.type_name = type.token.text;
                 result.expressions.push_back(std::move(type));
             } else {
@@ -489,7 +489,8 @@ private:
                 }
                 consume(TokenKind::RightBrace, "expected '}' after enum members");
             } else if (result.expressions.back().token.text == "list" && match(TokenKind::Less)) {
-                result.type_name += "<" + consume(TokenKind::Identifier, "expected list element type").text + ">";
+                result.type_name +=
+                    "<" + consume(TokenKind::Identifier, "expected list element type").text + ">";
                 consume(TokenKind::Greater, "expected '>' after list element type");
             }
             if (match(TokenKind::Equal))
@@ -755,7 +756,8 @@ Value Value::record_value(std::map<std::string, Value> value)
 namespace
 {
 
-bool schema_value_matches(const Value& value, std::string_view type,
+bool schema_value_matches(const Value&                    value,
+                          std::string_view                type,
                           const std::vector<std::string>& enum_values)
 {
     if (type == "str")
@@ -767,8 +769,8 @@ bool schema_value_matches(const Value& value, std::string_view type,
     if (type == "list<str>" || type == "list<int>") {
         if (value.kind != Value::Kind::List)
             return false;
-        const Value::Kind element_kind = type == "list<str>" ? Value::Kind::String
-                                                               : Value::Kind::Integer;
+        const Value::Kind element_kind =
+            type == "list<str>" ? Value::Kind::String : Value::Kind::Integer;
         for (const Value& element : value.list)
             if (element.kind != element_kind)
                 return false;
@@ -795,7 +797,7 @@ std::vector<SchemaField> schema(const Plugin& plugin)
         SchemaField field;
         field.name = statement.name;
         field.type = statement.type_name.empty() ? statement.expressions.front().token.text
-                                                  : statement.type_name;
+                                                 : statement.type_name;
         if (field.type == "enum")
             field.enum_values = statement.names;
         if (statement.expressions.size() == 2) {
@@ -817,18 +819,19 @@ std::vector<SchemaField> schema(const Plugin& plugin)
                     if (field.type == "enum")
                         field.default_value = Value::string_value(value.token.text);
                     break;
-                case Expr::Kind::List: {
-                    std::vector<Value> values;
-                    for (const Expr& child : value.children) {
-                        if (child.kind == Expr::Kind::String)
-                            values.push_back(Value::string_value(child.token.text));
-                        else if (child.kind == Expr::Kind::Integer)
-                            values.push_back(Value::integer_value(child.token.integer));
+                case Expr::Kind::List:
+                    {
+                        std::vector<Value> values;
+                        for (const Expr& child : value.children) {
+                            if (child.kind == Expr::Kind::String)
+                                values.push_back(Value::string_value(child.token.text));
+                            else if (child.kind == Expr::Kind::Integer)
+                                values.push_back(Value::integer_value(child.token.integer));
+                        }
+                        if (values.size() == value.children.size())
+                            field.default_value = Value::list_value(std::move(values));
+                        break;
                     }
-                    if (values.size() == value.children.size())
-                        field.default_value = Value::list_value(std::move(values));
-                    break;
-                }
                 default:
                     break;
             }
@@ -841,9 +844,9 @@ std::vector<SchemaField> schema(const Plugin& plugin)
 std::pair<std::map<std::string, Value>, std::vector<std::string>>
 build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides)
 {
-    std::map<std::string, Value> result;
-    std::vector<std::string>     errors;
-    const auto                   fields = schema(plugin);
+    std::map<std::string, Value>              result;
+    std::vector<std::string>                  errors;
+    const auto                                fields = schema(plugin);
     std::map<std::string, const SchemaField*> known;
     for (const SchemaField& field : fields) {
         if (!known.emplace(field.name, &field).second) {
@@ -853,7 +856,8 @@ build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides
         if (!field.default_value)
             errors.push_back("schema field '" + field.name + "' requires a default");
         else if (!schema_value_matches(*field.default_value, field.type, field.enum_values))
-            errors.push_back("default for schema field '" + field.name + "' has type " + field.type);
+            errors.push_back("default for schema field '" + field.name + "' has type " +
+                             field.type);
         else
             result[field.name] = *field.default_value;
     }
@@ -945,70 +949,76 @@ private:
                 return StaticType::Boolean;
             case Expr::Kind::None:
                 return StaticType::None;
-            case Expr::Kind::Name: {
-                const auto found = values_.find(expr.token.text);
-                if (found == values_.end()) {
-                    error("unknown name '" + expr.token.text + "'", expr.token);
-                    return StaticType::Unknown;
+            case Expr::Kind::Name:
+                {
+                    const auto found = values_.find(expr.token.text);
+                    if (found == values_.end()) {
+                        error("unknown name '" + expr.token.text + "'", expr.token);
+                        return StaticType::Unknown;
+                    }
+                    return found->second;
                 }
-                return found->second;
-            }
-            case Expr::Kind::List: {
-                bool all_strings = true;
-                for (const Expr& child : expr.children)
-                    all_strings = all_strings && expression(child) == StaticType::String;
-                return all_strings ? StaticType::ListString : StaticType::ListUnknown;
-            }
+            case Expr::Kind::List:
+                {
+                    bool all_strings = true;
+                    for (const Expr& child : expr.children)
+                        all_strings = all_strings && expression(child) == StaticType::String;
+                    return all_strings ? StaticType::ListString : StaticType::ListUnknown;
+                }
             case Expr::Kind::Record:
                 for (const Expr& child : expr.children)
                     expression(child);
                 return StaticType::Record;
-            case Expr::Kind::Member: {
-                const StaticType object = expression(expr.children.front());
-                if (object != StaticType::Record && object != StaticType::Unknown)
-                    error("member access requires a record", expr.token);
-                const Expr& base = expr.children.front();
-                if (base.kind == Expr::Kind::Name && base.token.text == "project") {
-                    if (expr.token.text == "root")
+            case Expr::Kind::Member:
+                {
+                    const StaticType object = expression(expr.children.front());
+                    if (object != StaticType::Record && object != StaticType::Unknown)
+                        error("member access requires a record", expr.token);
+                    const Expr& base = expr.children.front();
+                    if (base.kind == Expr::Kind::Name && base.token.text == "project") {
+                        if (expr.token.text == "root")
+                            return StaticType::String;
+                        if (expr.token.text == "matched_files")
+                            return StaticType::ListString;
+                        error("unknown project member '" + expr.token.text + "'", expr.token);
+                    }
+                    return StaticType::Unknown;
+                }
+            case Expr::Kind::Index:
+                {
+                    const StaticType object = expression(expr.children[0]);
+                    const StaticType index  = expression(expr.children[1]);
+                    if (index != StaticType::Integer && index != StaticType::Unknown)
+                        error("list index must be an integer", expr.children[1].token);
+                    if (object == StaticType::ListString)
                         return StaticType::String;
-                    if (expr.token.text == "matched_files")
-                        return StaticType::ListString;
-                    error("unknown project member '" + expr.token.text + "'", expr.token);
+                    if (object != StaticType::ListUnknown && object != StaticType::Unknown)
+                        error("index access requires a list", expr.token);
+                    return StaticType::Unknown;
                 }
-                return StaticType::Unknown;
-            }
-            case Expr::Kind::Index: {
-                const StaticType object = expression(expr.children[0]);
-                const StaticType index  = expression(expr.children[1]);
-                if (index != StaticType::Integer && index != StaticType::Unknown)
-                    error("list index must be an integer", expr.children[1].token);
-                if (object == StaticType::ListString)
-                    return StaticType::String;
-                if (object != StaticType::ListUnknown && object != StaticType::Unknown)
-                    error("index access requires a list", expr.token);
-                return StaticType::Unknown;
-            }
-            case Expr::Kind::Unary: {
-                const StaticType operand = expression(expr.children.front());
-                if (expr.token.kind == TokenKind::Bang) {
-                    if (operand != StaticType::Boolean && operand != StaticType::Unknown)
-                        error("unary '!' requires a boolean", expr.token);
-                    return StaticType::Boolean;
+            case Expr::Kind::Unary:
+                {
+                    const StaticType operand = expression(expr.children.front());
+                    if (expr.token.kind == TokenKind::Bang) {
+                        if (operand != StaticType::Boolean && operand != StaticType::Unknown)
+                            error("unary '!' requires a boolean", expr.token);
+                        return StaticType::Boolean;
+                    }
+                    if (operand != StaticType::Integer && operand != StaticType::Unknown)
+                        error("unary '-' requires an integer", expr.token);
+                    return StaticType::Integer;
                 }
-                if (operand != StaticType::Integer && operand != StaticType::Unknown)
-                    error("unary '-' requires an integer", expr.token);
-                return StaticType::Integer;
-            }
             case Expr::Kind::Binary:
                 return binary(expr);
-            case Expr::Kind::Conditional: {
-                const StaticType condition = expression(expr.children[0]);
-                if (condition != StaticType::Boolean && condition != StaticType::Unknown)
-                    error("conditional condition must be a boolean", expr.children[0].token);
-                const StaticType chosen = expression(expr.children[1]);
-                const StaticType fallback = expression(expr.children[2]);
-                return chosen == fallback ? chosen : StaticType::Unknown;
-            }
+            case Expr::Kind::Conditional:
+                {
+                    const StaticType condition = expression(expr.children[0]);
+                    if (condition != StaticType::Boolean && condition != StaticType::Unknown)
+                        error("conditional condition must be a boolean", expr.children[0].token);
+                    const StaticType chosen   = expression(expr.children[1]);
+                    const StaticType fallback = expression(expr.children[2]);
+                    return chosen == fallback ? chosen : StaticType::Unknown;
+                }
             case Expr::Kind::Call:
                 return call(expr);
         }
@@ -1019,7 +1029,7 @@ private:
     {
         const StaticType left  = expression(expr.children[0]);
         const StaticType right = expression(expr.children[1]);
-        const TokenKind op     = expr.token.kind;
+        const TokenKind  op    = expr.token.kind;
         if (op == TokenKind::AndAnd || op == TokenKind::OrOr) {
             require_boolean(left, expr.children[0].token);
             require_boolean(right, expr.children[1].token);
@@ -1111,7 +1121,7 @@ private:
         }
     }
 
-    std::vector<std::string>& errors_;
+    std::vector<std::string>&         errors_;
     std::map<std::string, StaticType> values_;
 };
 
@@ -1167,9 +1177,82 @@ private:
             diag::error(message, diag::Location{source_name_, token.line, token.column})};
     }
 
-    static bool truthy(const Value& value)
+    // Unwrap a value that must be a boolean.
+    //
+    // KPL has no truthiness coercion (design doc §5.6 makes `bool` its own
+    // type), so anything else here is a plugin bug. The predecessor of this
+    // helper, `truthy()`, quietly answered "false" for every non-boolean,
+    // which turned `if config.build_dir { ... }` — a real mistake — into a
+    // silently skipped branch instead of a diagnostic.
+    bool boolean(const Value& value, const Token& token) const
     {
-        return value.kind == Value::Kind::Boolean && value.boolean;
+        if (value.kind != Value::Kind::Boolean)
+            fail("expected a boolean, got " + std::string(kind_name(value.kind)), token);
+        return value.boolean;
+    }
+
+    static const char* kind_name(Value::Kind kind)
+    {
+        switch (kind) {
+            case Value::Kind::None:
+                return "none";
+            case Value::Kind::String:
+                return "a string";
+            case Value::Kind::Integer:
+                return "an integer";
+            case Value::Kind::Boolean:
+                return "a boolean";
+            case Value::Kind::List:
+                return "a list";
+            case Value::Kind::Record:
+                return "a record";
+        }
+        return "a value";
+    }
+
+    // Deep structural equality for `==` / `!=`.
+    //
+    // The first implementation compared every scalar field of Value side by
+    // side (`left.string == right.string && left.integer == ...`). For two
+    // lists that test looks at the *unused* scalar fields — both empty — and
+    // never at the elements, so `["a"] == ["b"]` evaluated to true. Comparing
+    // per kind is the only way to get this right.
+    static bool equal(const Value& left, const Value& right)
+    {
+        if (left.kind != right.kind)
+            return false;
+        switch (left.kind) {
+            case Value::Kind::None:
+                return true;
+            case Value::Kind::String:
+                return left.string == right.string;
+            case Value::Kind::Integer:
+                return left.integer == right.integer;
+            case Value::Kind::Boolean:
+                return left.boolean == right.boolean;
+            case Value::Kind::List:
+                if (left.list.size() != right.list.size())
+                    return false;
+                for (std::size_t index = 0; index < left.list.size(); ++index)
+                    if (!equal(left.list[index], right.list[index]))
+                        return false;
+                return true;
+            case Value::Kind::Record:
+                {
+                    if (left.record.size() != right.record.size())
+                        return false;
+                    // Both maps are std::map, so a lock-step walk visits the same
+                    // key order on each side.
+                    auto right_field = right.record.begin();
+                    for (const auto& [name, value] : left.record) {
+                        if (right_field->first != name || !equal(value, right_field->second))
+                            return false;
+                        ++right_field;
+                    }
+                    return true;
+                }
+        }
+        return false;
     }
 
     static std::string string(const Value& value, const Token& token, const Evaluator& evaluator)
@@ -1235,7 +1318,7 @@ private:
                 {
                     const Value value = expression(expr.children.front());
                     if (expr.token.kind == TokenKind::Bang)
-                        return Value::boolean_value(!truthy(value));
+                        return Value::boolean_value(!boolean(value, expr.token));
                     if (value.kind != Value::Kind::Integer)
                         fail("unary '-' requires an integer", expr.token);
                     return Value::integer_value(-value.integer);
@@ -1243,8 +1326,9 @@ private:
             case Expr::Kind::Binary:
                 return binary(expr);
             case Expr::Kind::Conditional:
-                return truthy(expression(expr.children[0])) ? expression(expr.children[1])
-                                                            : expression(expr.children[2]);
+                return boolean(expression(expr.children[0]), expr.children[0].token)
+                           ? expression(expr.children[1])
+                           : expression(expr.children[2]);
             case Expr::Kind::Call:
                 return call(expr);
         }
@@ -1253,11 +1337,28 @@ private:
 
     Value binary(const Expr& expr)
     {
-        const Value left = expression(expr.children[0]);
-        if (expr.token.kind == TokenKind::AndAnd && !truthy(left))
-            return Value::boolean_value(false);
-        if (expr.token.kind == TokenKind::OrOr && truthy(left))
-            return Value::boolean_value(true);
+        // `&&` and `||` are handled first and completely, because they are the
+        // only operators that must NOT evaluate their right operand up front.
+        // Short-circuiting is what makes
+        //     project.exists("package.json") && contains(project.read(...), "x")
+        // safe to write: the read never happens when the file is missing.
+        //
+        // The bug this replaces: the old code returned early only on the
+        // short-circuit path and then fell through to the arithmetic/compare
+        // ladder, which knows nothing about AndAnd/OrOr. So `true && true`
+        // reached the bottom and failed with "incompatible operands" — every
+        // non-short-circuiting logical expression in every plugin was broken.
+        if (expr.token.kind == TokenKind::AndAnd || expr.token.kind == TokenKind::OrOr) {
+            const bool left = boolean(expression(expr.children[0]), expr.children[0].token);
+            if (expr.token.kind == TokenKind::AndAnd && !left)
+                return Value::boolean_value(false);
+            if (expr.token.kind == TokenKind::OrOr && left)
+                return Value::boolean_value(true);
+            return Value::boolean_value(
+                boolean(expression(expr.children[1]), expr.children[1].token));
+        }
+
+        const Value left  = expression(expr.children[0]);
         const Value right = expression(expr.children[1]);
         if (expr.token.kind == TokenKind::Plus) {
             if (left.kind == Value::Kind::String && right.kind == Value::Kind::String)
@@ -1293,9 +1394,8 @@ private:
             }
         }
         if (expr.token.kind == TokenKind::EqualEqual || expr.token.kind == TokenKind::BangEqual) {
-            const bool equal = left.kind == right.kind && left.string == right.string &&
-                               left.integer == right.integer && left.boolean == right.boolean;
-            return Value::boolean_value(expr.token.kind == TokenKind::EqualEqual ? equal : !equal);
+            const bool same = equal(left, right);
+            return Value::boolean_value(expr.token.kind == TokenKind::EqualEqual ? same : !same);
         }
         fail("incompatible operands", expr.token);
     }
@@ -1340,13 +1440,15 @@ private:
                     return;
                 }
             case Statement::Kind::If:
-                for (const Statement& child : truthy(expression(statement.expressions.front()))
+                for (const Statement& child : boolean(expression(statement.expressions.front()),
+                                                      statement.expressions.front().token)
                                                   ? statement.body
                                                   : statement.otherwise)
                     statement_run(child);
                 return;
             case Statement::Kind::Concurrent:
-                spec_.concurrent = truthy(expression(statement.expressions.front()));
+                spec_.concurrent = boolean(expression(statement.expressions.front()),
+                                           statement.expressions.front().token);
                 return;
             case Statement::Kind::ReportFreedSpace:
                 spec_.report_freed_space = true;
