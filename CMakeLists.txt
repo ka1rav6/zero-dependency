@@ -96,6 +96,7 @@ endif()
 # small header-only modules (diag, argv, fs) are included directly.
 add_library(kap_core STATIC
     core/toml.cpp
+    core/json.cpp
     core/cli.cpp
     core/kpl.cpp
 )
@@ -120,6 +121,7 @@ add_executable(
     tests/test_argv.cpp
     tests/test_fs.cpp
     tests/test_toml.cpp
+    tests/test_json.cpp
     tests/test_cli.cpp
     tests/test_kpl.cpp
     tests/test_version.cpp
