@@ -311,3 +311,28 @@ KAP_TEST("KPL inline conditional keeps its source location")
         KAP_ASSERT(error.diagnostic().location.col > 0);
     }
 });
+
+KAP_TEST("KPL commands only see the parameters they declare")
+{
+    // Regression: the environment was pre-loaded with project/config/extra
+    // regardless of the signature, so a command could read a host value it
+    // never asked for.
+    const auto plugin = kap::kpl::parse("command clean(project, config) { step extra }");
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "clean", project, {}, {"x"}));
+
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("extra") != std::string::npos);
+});
+
+KAP_TEST("KPL rejects a command parameter that is not a host value")
+{
+    const auto plugin = kap::kpl::parse("command build(project, widget) { step \"x\" }");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("widget") != std::string::npos);
+
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "build", project));
+});

@@ -932,12 +932,27 @@ public:
 
     void command(const Command& command)
     {
+        // Mirror of Evaluator::run(): only the declared parameters are in
+        // scope, so a name the command did not ask for is reported here at
+        // load time rather than surfacing as a run-time surprise.
+        static const std::map<std::string, StaticType> kHostArguments = {
+            {"project", StaticType::Record},
+            {"config", StaticType::Record},
+            {"extra", StaticType::ListString},
+        };
+
         values_.clear();
-        values_["project"] = StaticType::Record;
-        values_["config"]  = StaticType::Record;
-        values_["extra"]   = StaticType::ListString;
-        for (const std::string& parameter : command.parameters)
-            values_.try_emplace(parameter, StaticType::Unknown);
+        for (const std::string& parameter : command.parameters) {
+            const auto host = kHostArguments.find(parameter);
+            if (host == kHostArguments.end()) {
+                error("unknown command parameter '" + parameter +
+                          "'; expected one of project, config, extra",
+                      command.token);
+                values_[parameter] = StaticType::Unknown;
+                continue;
+            }
+            values_[parameter] = host->second;
+        }
         for (const Statement& statement : command.body.statements)
             statement_check(statement);
     }
@@ -1156,19 +1171,37 @@ public:
               const Project&                      project,
               const std::map<std::string, Value>& config,
               const std::vector<std::string>&     extra)
-        : source_name_(std::move(source_name))
+        : source_name_(std::move(source_name)), project_(&project)
     {
-        environment_["config"]  = Value::record_value(config);
-        environment_["extra"]   = strings_to_value(extra);
-        environment_["project"] = Value::record_value({
+        // The three host values a command may ask for, by the names the design
+        // doc uses in every example (§5.3). They are staged here and bound in
+        // run(), because *which* of them are in scope depends on the command's
+        // own parameter list.
+        arguments_["config"]  = Value::record_value(config);
+        arguments_["extra"]   = strings_to_value(extra);
+        arguments_["project"] = Value::record_value({
             {"root", Value::string_value(project.root)},
             {"matched_files", strings_to_value(project.matched_files)},
         });
-        project_                = &project;
     }
 
     CommandSpec run(const Command& command)
     {
+        // Bind exactly the parameters the command declares — no more.
+        //
+        // The environment used to be pre-loaded with all three host values
+        // unconditionally, so `command clean(project, config)` could still
+        // read `extra` and get the passthrough arguments it never asked for.
+        // That is a silent scoping hole: a plugin would work locally and then
+        // behave differently the moment someone corrected its signature.
+        for (const std::string& parameter : command.parameters) {
+            const auto argument = arguments_.find(parameter);
+            if (argument == arguments_.end())
+                fail("unknown command parameter '" + parameter +
+                         "'; expected one of project, config, extra",
+                     command.token);
+            environment_[parameter] = argument->second;
+        }
         for (const Statement& statement : command.body.statements)
             statement_run(statement);
         return spec_;
@@ -1473,6 +1506,7 @@ private:
 
     std::string                  source_name_;
     const Project*               project_ = nullptr;
+    std::map<std::string, Value> arguments_;
     std::map<std::string, Value> environment_;
     CommandSpec                  spec_;
 };
