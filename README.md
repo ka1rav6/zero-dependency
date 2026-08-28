@@ -57,7 +57,9 @@ Run the full pipeline before you commit — if this is green, CI will be:
 
 ### Status
 
-Milestones 0 and 1 are complete: the dev container, CI, and the shared
-infrastructure libraries (diagnostics, argv, sandboxed filesystem, TOML, CLI).
-`kap config get` reads a project's `kap.toml`. The KPL lexer and parser
-(Milestone 2) are next. See `docs/design.md` §11 for the full roadmap.
+Milestones 0 and 1 are complete, and Milestone 2's KPL lexer, parser, and AST
+are implemented: the dev container, CI, shared infrastructure libraries
+(diagnostics, argv, sandboxed filesystem, TOML, CLI), and KPL front-end are in
+place. `kap config get` reads a project's `kap.toml`. Plugin-doctor wiring and
+fixture coverage remain in Milestone 2. See `docs/design.md` §11 for the full
+roadmap.

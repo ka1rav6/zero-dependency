@@ -925,9 +925,9 @@ quoting round-trip is involved and no shell is ever invoked.
 ### Milestone 2 — KPL lexer + parser
 **Goal:** Parse `plugin.kpl` into an AST; no execution yet.
 
-- [ ] Tokenizer with comment support
-- [ ] Recursive-descent parser per §5.5 grammar
-- [ ] AST nodes for all top-level blocks and statements
+- [x] Tokenizer with comment support
+- [x] Recursive-descent parser per §5.5 grammar
+- [x] AST nodes for all top-level blocks and statements
 - [ ] `kap plugin doctor` reports parse errors with line/column
 - [ ] Golden tests: parse all example plugins in `plugins/`
 
