@@ -194,6 +194,11 @@ std::vector<SchemaField> schema(const Plugin& plugin);
 std::pair<std::map<std::string, Value>, std::vector<std::string>>
 build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides);
 
+// Check command expressions without executing them. Unknown values from the
+// host (notably config fields) are allowed where their runtime type is not
+// statically knowable.
+std::vector<std::string> type_check(const Plugin& plugin);
+
 // Evaluate one command without spawning a process. `config` and `extra` are
 // supplied by the host; project callbacks are the only filesystem/tool access
 // available to KPL.

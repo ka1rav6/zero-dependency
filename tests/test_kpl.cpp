@@ -176,3 +176,25 @@ KAP_TEST("KPL schema rejects unknown and incorrectly typed config")
     KAP_ASSERT(errors[0].find("unknown config key") != std::string::npos ||
                errors[1].find("unknown config key") != std::string::npos);
 });
+
+KAP_TEST("KPL type checker accepts valid command expressions")
+{
+    const auto plugin = kap::kpl::parse(
+        "command build(project, config, extra) {"
+        " let args = [\"cmake\"] + extra"
+        " if project.tool(\"ninja\") { step args }"
+        " concurrent config.release"
+        "}");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+});
+
+KAP_TEST("KPL type checker rejects invalid conditions and step values")
+{
+    const auto plugin = kap::kpl::parse(
+        "command broken(config) { if \"yes\" { step 42 } concurrent 1 }");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT(errors[0].find("boolean") != std::string::npos);
+    KAP_ASSERT(errors[1].find("strings") != std::string::npos);
+    KAP_ASSERT(errors[2].find("boolean") != std::string::npos);
+});

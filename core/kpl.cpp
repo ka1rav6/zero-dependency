@@ -875,6 +875,259 @@ build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides
 namespace
 {
 
+enum class StaticType
+{
+    Unknown,
+    None,
+    String,
+    Integer,
+    Boolean,
+    ListString,
+    ListUnknown,
+    Record
+};
+
+const char* type_name(StaticType type)
+{
+    switch (type) {
+        case StaticType::None:
+            return "none";
+        case StaticType::String:
+            return "string";
+        case StaticType::Integer:
+            return "integer";
+        case StaticType::Boolean:
+            return "boolean";
+        case StaticType::ListString:
+            return "list<string>";
+        case StaticType::ListUnknown:
+            return "list";
+        case StaticType::Record:
+            return "record";
+        case StaticType::Unknown:
+            return "unknown";
+    }
+    return "unknown";
+}
+
+class TypeChecker
+{
+public:
+    explicit TypeChecker(std::vector<std::string>& errors) : errors_(errors) {}
+
+    void command(const Command& command)
+    {
+        values_.clear();
+        values_["project"] = StaticType::Record;
+        values_["config"]  = StaticType::Record;
+        values_["extra"]   = StaticType::ListString;
+        for (const std::string& parameter : command.parameters)
+            values_.try_emplace(parameter, StaticType::Unknown);
+        for (const Statement& statement : command.body.statements)
+            statement_check(statement);
+    }
+
+private:
+    void error(const std::string& message, const Token& token)
+    {
+        errors_.push_back(message + " at line " + std::to_string(token.line) + ":" +
+                          std::to_string(token.column));
+    }
+
+    StaticType expression(const Expr& expr)
+    {
+        switch (expr.kind) {
+            case Expr::Kind::String:
+                return StaticType::String;
+            case Expr::Kind::Integer:
+                return StaticType::Integer;
+            case Expr::Kind::Boolean:
+                return StaticType::Boolean;
+            case Expr::Kind::None:
+                return StaticType::None;
+            case Expr::Kind::Name: {
+                const auto found = values_.find(expr.token.text);
+                if (found == values_.end()) {
+                    error("unknown name '" + expr.token.text + "'", expr.token);
+                    return StaticType::Unknown;
+                }
+                return found->second;
+            }
+            case Expr::Kind::List: {
+                bool all_strings = true;
+                for (const Expr& child : expr.children)
+                    all_strings = all_strings && expression(child) == StaticType::String;
+                return all_strings ? StaticType::ListString : StaticType::ListUnknown;
+            }
+            case Expr::Kind::Record:
+                for (const Expr& child : expr.children)
+                    expression(child);
+                return StaticType::Record;
+            case Expr::Kind::Member: {
+                const StaticType object = expression(expr.children.front());
+                if (object != StaticType::Record && object != StaticType::Unknown)
+                    error("member access requires a record", expr.token);
+                const Expr& base = expr.children.front();
+                if (base.kind == Expr::Kind::Name && base.token.text == "project") {
+                    if (expr.token.text == "root")
+                        return StaticType::String;
+                    if (expr.token.text == "matched_files")
+                        return StaticType::ListString;
+                    error("unknown project member '" + expr.token.text + "'", expr.token);
+                }
+                return StaticType::Unknown;
+            }
+            case Expr::Kind::Index: {
+                const StaticType object = expression(expr.children[0]);
+                const StaticType index  = expression(expr.children[1]);
+                if (index != StaticType::Integer && index != StaticType::Unknown)
+                    error("list index must be an integer", expr.children[1].token);
+                if (object == StaticType::ListString)
+                    return StaticType::String;
+                if (object != StaticType::ListUnknown && object != StaticType::Unknown)
+                    error("index access requires a list", expr.token);
+                return StaticType::Unknown;
+            }
+            case Expr::Kind::Unary: {
+                const StaticType operand = expression(expr.children.front());
+                if (expr.token.kind == TokenKind::Bang) {
+                    if (operand != StaticType::Boolean && operand != StaticType::Unknown)
+                        error("unary '!' requires a boolean", expr.token);
+                    return StaticType::Boolean;
+                }
+                if (operand != StaticType::Integer && operand != StaticType::Unknown)
+                    error("unary '-' requires an integer", expr.token);
+                return StaticType::Integer;
+            }
+            case Expr::Kind::Binary:
+                return binary(expr);
+            case Expr::Kind::Conditional: {
+                const StaticType condition = expression(expr.children[0]);
+                if (condition != StaticType::Boolean && condition != StaticType::Unknown)
+                    error("conditional condition must be a boolean", expr.children[0].token);
+                const StaticType chosen = expression(expr.children[1]);
+                const StaticType fallback = expression(expr.children[2]);
+                return chosen == fallback ? chosen : StaticType::Unknown;
+            }
+            case Expr::Kind::Call:
+                return call(expr);
+        }
+        return StaticType::Unknown;
+    }
+
+    StaticType binary(const Expr& expr)
+    {
+        const StaticType left  = expression(expr.children[0]);
+        const StaticType right = expression(expr.children[1]);
+        const TokenKind op     = expr.token.kind;
+        if (op == TokenKind::AndAnd || op == TokenKind::OrOr) {
+            require_boolean(left, expr.children[0].token);
+            require_boolean(right, expr.children[1].token);
+            return StaticType::Boolean;
+        }
+        if (op == TokenKind::EqualEqual || op == TokenKind::BangEqual)
+            return StaticType::Boolean;
+        if (op == TokenKind::Plus &&
+            ((left == StaticType::String && right == StaticType::String) ||
+             (left == StaticType::ListString && right == StaticType::ListString)))
+            return left;
+        if ((left == StaticType::Integer && right == StaticType::Integer) ||
+            left == StaticType::Unknown || right == StaticType::Unknown)
+            return op == TokenKind::Less || op == TokenKind::LessEqual ||
+                           op == TokenKind::Greater || op == TokenKind::GreaterEqual
+                       ? StaticType::Boolean
+                       : StaticType::Integer;
+        error("incompatible operands", expr.token);
+        return StaticType::Unknown;
+    }
+
+    void require_boolean(StaticType type, const Token& token)
+    {
+        if (type != StaticType::Boolean && type != StaticType::Unknown)
+            error("condition must be a boolean, got " + std::string(type_name(type)), token);
+    }
+
+    StaticType call(const Expr& expr)
+    {
+        const Expr& member = expr.children.front();
+        if (member.kind != Expr::Kind::Member || member.children.front().kind != Expr::Kind::Name ||
+            member.children.front().token.text != "project") {
+            error("only project host calls are allowed", expr.token);
+            return StaticType::Unknown;
+        }
+        if (expr.children.size() != 2 ||
+            (expr.children.size() == 2 && expression(expr.children[1]) != StaticType::String))
+            error("project host calls require one string argument", expr.token);
+        if (member.token.text != "tool" && member.token.text != "exists")
+            error("unknown project method '" + member.token.text + "'", member.token);
+        return StaticType::Boolean;
+    }
+
+    void statement_check(const Statement& statement)
+    {
+        switch (statement.kind) {
+            case Statement::Kind::Let:
+            case Statement::Kind::Assignment:
+                values_[statement.name] = expression(statement.expressions.front());
+                return;
+            case Statement::Kind::Step:
+                for (const Expr& argument : statement.expressions) {
+                    const StaticType type = expression(argument);
+                    if (type != StaticType::String && type != StaticType::ListString &&
+                        type != StaticType::Unknown)
+                        error("step arguments must be strings, got " + std::string(type_name(type)),
+                              argument.token);
+                }
+                if (statement.expressions.empty())
+                    error("step requires a non-empty command", statement.token);
+                return;
+            case Statement::Kind::If:
+                require_boolean(expression(statement.expressions.front()), statement.token);
+                for (const Statement& child : statement.body)
+                    statement_check(child);
+                for (const Statement& child : statement.otherwise)
+                    statement_check(child);
+                return;
+            case Statement::Kind::For:
+                if (expression(statement.expressions.front()) == StaticType::None)
+                    error("for loop requires a list", statement.expressions.front().token);
+                values_[statement.name] = StaticType::Unknown;
+                for (const Statement& child : statement.body)
+                    statement_check(child);
+                return;
+            case Statement::Kind::Match:
+                expression(statement.expressions.front());
+                for (std::size_t index = 1; index < statement.expressions.size(); ++index)
+                    expression(statement.expressions[index]);
+                return;
+            case Statement::Kind::Concurrent:
+                require_boolean(expression(statement.expressions.front()), statement.token);
+                return;
+            case Statement::Kind::ReportFreedSpace:
+            case Statement::Kind::Expression:
+                for (const Expr& expr : statement.expressions)
+                    expression(expr);
+                return;
+        }
+    }
+
+    std::vector<std::string>& errors_;
+    std::map<std::string, StaticType> values_;
+};
+
+} // namespace
+
+std::vector<std::string> type_check(const Plugin& plugin)
+{
+    std::vector<std::string> errors;
+    for (const Command& command : plugin.commands)
+        TypeChecker{errors}.command(command);
+    return errors;
+}
+
+namespace
+{
+
 class Evaluator
 {
 public:
