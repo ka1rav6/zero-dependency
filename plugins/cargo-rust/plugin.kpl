@@ -1,14 +1,63 @@
+// cargo-rust — build, test, lint, format, and clean a Cargo project.
+//
+// The worked example from design doc §5.10, extended with the `check` and
+// `run` commands from the §8 CLI surface.
+
 manifest {
-  name = "cargo-rust"
-  version = "1.0.0"
+  name        = "cargo-rust"
+  version     = "1.0.0"
   api_version = 1
-  priority = 30
+  priority    = 40
+  composable  = false
+  supersedes  = []
 }
 
 detect {
   file_exists "Cargo.toml"
 }
 
+requires {
+  any_of   [cargo]
+  optional [rustfmt, clippy]
+}
+
+schema {
+  release: bool = false
+  check:   bool = false
+}
+
 command build(project, config, extra) {
-  step ["cargo", "build"] + extra
+  // `release` is a plain bool rather than an enum because there are exactly
+  // two states and `--release` is the only flag either one produces.
+  let flags = if config.release then ["--release"] else []
+  step ["cargo", "build"] + flags + extra
+}
+
+command test(project, config, extra) {
+  step ["cargo", "test"] + extra
+}
+
+command check(project, config, extra) {
+  step ["cargo", "check"] + extra
+}
+
+command run(project, config, extra) {
+  let flags = if config.release then ["--release"] else []
+  step ["cargo", "run"] + flags + extra
+}
+
+command lint(project, config) {
+  step ["cargo", "clippy", "--", "-D", "warnings"]
+}
+
+command fmt(project, config) {
+  // `kap fmt --set check=true` verifies formatting instead of rewriting it,
+  // which is what a CI job wants.
+  let args = if config.check then ["--", "--check"] else []
+  step ["cargo", "fmt"] + args
+}
+
+command clean(project, config) {
+  step ["cargo", "clean"]
+  report_freed_space
 }

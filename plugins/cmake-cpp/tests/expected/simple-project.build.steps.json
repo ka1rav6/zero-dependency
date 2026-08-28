@@ -1,0 +1,8 @@
+{
+  "tools": ["cmake", "ninja"],
+  "steps": [
+    { "cmd": ["mkdir", "-p", "build"] },
+    { "cmd": ["cmake", "-S", ".", "-B", "build", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug"] },
+    { "cmd": ["cmake", "--build", "build"] }
+  ]
+}

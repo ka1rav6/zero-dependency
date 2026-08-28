@@ -72,6 +72,17 @@ expect_stderr_contains() {
     esac
 }
 
+# expect_stdout_contains <description> <needle> <args...>
+expect_stdout_contains() {
+    local desc="$1" needle="$2"; shift 2
+    local got
+    got="$("$kap_bin" "$@" 2>/dev/null)"
+    case "$got" in
+        *"$needle"*) pass "$desc" ;;
+        *)           fail "$desc" "expected stdout to contain '$needle', got '$got'  (kap $*)" ;;
+    esac
+}
+
 # expect_empty_stdout <description> <args...>
 expect_empty_stdout() {
     local desc="$1"; shift
@@ -172,6 +183,51 @@ printf 'manifest { name = "broken"\n' > "$bad_dir/plugins/broken/plugin.kpl"
 expect_status "plugin doctor rejects a malformed plugin" 1 plugin doctor --root "$bad_dir"
 expect_stderr_contains "plugin doctor preserves parser locations" "plugin.kpl:2:" \
     plugin doctor --root "$bad_dir"
+
+# --- plugin test ------------------------------------------------------------------
+#
+# Milestone 3's exit criterion: the bundled cmake-cpp and cargo-rust fixture
+# cases must pass without any real build tool being executed. Note there is no
+# cmake, cargo, or ninja on the machine running this — that is the point.
+
+expect_status "plugin test runs every bundled plugin's cases" 0 \
+    plugin test --root "$repo_root"
+expect_stdout_contains "plugin test reports the cmake-cpp build case" \
+    "cmake-cpp simple-project.build" plugin test --root "$repo_root"
+expect_stdout_contains "plugin test reports the cargo-rust build case" \
+    "cargo-rust simple-crate.build" plugin test --root "$repo_root"
+
+expect_status "plugin test accepts a single plugin name" 0 \
+    plugin test cargo-rust --root "$repo_root"
+expect_empty_stdout "plugin test rejects an unknown plugin name" \
+    plugin test no-such-plugin --root "$repo_root"
+expect_status "an unknown plugin name exits 1" 1 \
+    plugin test no-such-plugin --root "$repo_root"
+expect_status "plugin test rejects extra arguments" 2 \
+    plugin test a b --root "$repo_root"
+expect_status "an unknown plugin subcommand exits 2" 2 plugin frobnicate --root "$repo_root"
+expect_stderr_contains "an unknown plugin subcommand names the alternatives" \
+    "expected one of: doctor, test" plugin frobnicate --root "$repo_root"
+
+# A plugin whose golden file disagrees with its plugin.kpl must fail loudly and
+# show both renderings — "it differs" alone is not actionable.
+mkdir -p "$bad_dir/plugins/mismatch/tests/fixtures/demo" \
+         "$bad_dir/plugins/mismatch/tests/expected"
+cat > "$bad_dir/plugins/mismatch/plugin.kpl" <<'KPL'
+manifest { name = "mismatch" version = "1.0.0" api_version = 1 }
+command build(project, config, extra) { step echo "actual" }
+KPL
+printf '{ "steps": [ { "cmd": ["echo", "expected"] } ] }\n' \
+    > "$bad_dir/plugins/mismatch/tests/expected/demo.build.steps.json"
+touch "$bad_dir/plugins/mismatch/tests/fixtures/demo/.keep"
+
+expect_status "a mismatched golden file exits 1" 1 plugin test mismatch --root "$bad_dir"
+expect_stderr_contains "a mismatch shows the actual spec" '"actual"' \
+    plugin test mismatch --root "$bad_dir"
+expect_stderr_contains "a mismatch shows the expected spec" '"expected"' \
+    plugin test mismatch --root "$bad_dir"
+
+# --- malformed config -------------------------------------------------------------
 
 printf 'a = @\n' > "$bad_dir/kap.toml"
 

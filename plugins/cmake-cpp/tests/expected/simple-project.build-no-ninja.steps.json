@@ -1,0 +1,10 @@
+{
+  "command": "build",
+  "tools": ["cmake"],
+  "config": { "build_dir": "out", "build_type": "Release", "cmake_args": ["-DBUILD_TESTING=OFF"] },
+  "steps": [
+    { "cmd": ["mkdir", "-p", "out"] },
+    { "cmd": ["cmake", "-S", ".", "-B", "out", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_TESTING=OFF"] },
+    { "cmd": ["cmake", "--build", "out"] }
+  ]
+}

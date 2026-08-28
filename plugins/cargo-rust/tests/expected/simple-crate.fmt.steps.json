@@ -1,0 +1,7 @@
+{
+  "config": { "check": true },
+  "tools": ["cargo", "rustfmt"],
+  "steps": [
+    { "cmd": ["cargo", "fmt", "--", "--check"] }
+  ]
+}

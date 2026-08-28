@@ -1,0 +1,7 @@
+{
+  "tools": ["cmake", "ctest"],
+  "extra": ["-R", "unit"],
+  "steps": [
+    { "cmd": ["ctest", "--test-dir", "build", "--output-on-failure", "-R", "unit"] }
+  ]
+}

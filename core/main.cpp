@@ -19,6 +19,7 @@
 #include "core/diag.hpp"
 #include "core/fs.hpp"
 #include "core/kpl.hpp"
+#include "core/plugin.hpp"
 #include "core/toml.hpp"
 #include "core/version.hpp"
 
@@ -33,8 +34,9 @@ void print_usage(std::ostream& out)
            "       kap --version | --help\n"
            "\n"
            "commands:\n"
-           "  config get <key>   read one key from ./kap.toml (or --root)\n"
-           "  plugin doctor      validate bundled plugin files\n"
+           "  config get <key>     read one key from ./kap.toml (or --root)\n"
+           "  plugin doctor        validate bundled plugin files\n"
+           "  plugin test [name]   run plugin fixture tests\n"
            "\n"
            "global flags:\n"
            "  -n, --dry-run      print actions without running them\n"
@@ -42,37 +44,42 @@ void print_usage(std::ostream& out)
            "      --set k=v      override one config key (repeatable)\n"
            "      --verbose      extra logging\n"
            "\n"
-           "kap is under construction (Milestone 1). See docs/design.md for\n"
+           "kap is under construction (Milestone 3). See docs/design.md for\n"
            "the roadmap.\n";
 }
 
 std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 
+// `kap plugin doctor` — parse, manifest-validate, and type-check every bundled
+// plugin (design doc §6.1). This is the gate that keeps a plugin which cannot
+// possibly run from being reported as healthy, so it checks all three: a
+// plugin whose manifest is fine but whose `build` command references an
+// undeclared config key is broken, and saying "[PASS]" about it would be a lie.
 int run_plugin_doctor(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
     if (!args.empty()) {
         std::cerr << "kap: usage: kap plugin doctor\n";
         return 2;
     }
-    const std::filesystem::path    plugin_root = search_root(global) / "plugins";
-    const std::vector<std::string> plugin_dirs = kap::fs::glob(plugin_root, "*");
-    int                            failures    = 0;
-    int                            checked     = 0;
-    for (const std::string& plugin_dir : plugin_dirs) {
-        const std::filesystem::path source = plugin_root / plugin_dir / "plugin.kpl";
-        if (!kap::fs::is_file(source))
-            continue;
-        ++checked;
+    const std::filesystem::path             root     = search_root(global);
+    const std::vector<kap::plugin::Located> plugins  = kap::plugin::discover(root);
+    int                                     failures = 0;
+
+    for (const kap::plugin::Located& located : plugins) {
         try {
             const kap::kpl::Plugin plugin =
-                kap::kpl::parse(kap::fs::read_text(source), source.string());
-            const std::vector<std::string> errors = kap::kpl::validate(plugin);
+                kap::kpl::parse(kap::fs::read_text(located.manifest), located.manifest.string());
+
+            std::vector<std::string>       errors      = kap::kpl::validate(plugin);
+            const std::vector<std::string> type_errors = kap::kpl::type_check(plugin);
+            errors.insert(errors.end(), type_errors.begin(), type_errors.end());
+
             if (errors.empty()) {
-                std::cout << "[PASS] " << plugin_dir << "\n";
+                std::cout << "[PASS] " << located.name << "\n";
                 continue;
             }
             ++failures;
-            std::cerr << "kap: error: " << source.string() << ":\n";
+            std::cerr << "kap: error: " << located.manifest.string() << ":\n";
             for (const std::string& error : errors)
                 std::cerr << "  " << error << "\n";
         }
@@ -81,11 +88,93 @@ int run_plugin_doctor(const kap::cli::GlobalOptions& global, const std::vector<s
             std::cerr << error.report();
         }
     }
-    if (checked == 0) {
-        std::cerr << "kap: error: no plugin.kpl files found in " << plugin_root.string() << "\n";
+
+    if (plugins.empty()) {
+        std::cerr << "kap: error: no plugin.kpl files found in " << (root / "plugins").string()
+                  << "\n";
         return 1;
     }
     return failures == 0 ? 0 : 1;
+}
+
+// `kap plugin test [name]` — run each plugin's fixture cases (design doc §6.1,
+// Milestone 3 exit criterion). No build tool is ever executed: a case
+// evaluates a command block against a fixture directory and compares the
+// resulting CommandSpec with a committed golden file.
+int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    if (args.size() > 1) {
+        std::cerr << "kap: usage: kap plugin test [name]\n";
+        return 2;
+    }
+    const std::filesystem::path       root  = search_root(global);
+    std::vector<kap::plugin::Located> found = kap::plugin::discover(root);
+
+    if (args.size() == 1) {
+        const std::string& wanted = args[0];
+        std::erase_if(found, [&wanted](const kap::plugin::Located& p) { return p.name != wanted; });
+        if (found.empty()) {
+            std::cerr << "kap: error: no plugin named '" << wanted << "' under "
+                      << (root / "plugins").string() << "\n";
+            return 1;
+        }
+    }
+    if (found.empty()) {
+        std::cerr << "kap: error: no plugin.kpl files found in " << (root / "plugins").string()
+                  << "\n";
+        return 1;
+    }
+
+    int passed        = 0;
+    int failed        = 0;
+    int without_cases = 0;
+
+    for (const kap::plugin::Located& located : found) {
+        const std::vector<kap::plugin::CaseResult> results = kap::plugin::run_tests(located);
+        if (results.empty()) {
+            ++without_cases;
+            std::cout << "[SKIP] " << located.name << " (no test cases)\n";
+            continue;
+        }
+        for (const kap::plugin::CaseResult& result : results) {
+            if (result.passed) {
+                ++passed;
+                std::cout << "[PASS] " << located.name << " " << result.name << "\n";
+                continue;
+            }
+            ++failed;
+            std::cout << "[FAIL] " << located.name << " " << result.name << "\n";
+            std::cerr << "      " << result.detail << "\n";
+        }
+    }
+
+    std::cout << passed + failed << " cases: " << passed << " passed, " << failed << " failed";
+    if (without_cases != 0)
+        std::cout << ", " << without_cases << " plugin(s) without cases";
+    std::cout << "\n";
+    return failed == 0 ? 0 : 1;
+}
+
+// `kap plugin <subcommand> ...` — design doc §6.1. As with `kap config`,
+// an unknown subcommand is refused rather than silently treated as one of the
+// implemented ones.
+int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::string>& argv)
+{
+    if (argv.empty()) {
+        std::cerr << "kap: usage: kap plugin <doctor|test> ...\n";
+        return 2;
+    }
+    const std::string&             subcommand = argv[0];
+    const std::vector<std::string> rest(argv.begin() + 1, argv.end());
+
+    if (subcommand == "doctor")
+        return run_plugin_doctor(global, rest);
+    if (subcommand == "test")
+        return run_plugin_test(global, rest);
+
+    std::cerr << "kap: error: unknown subcommand 'plugin " << subcommand << "'\n"
+              << "      note: expected one of: doctor, test\n";
+    return 2;
 }
 
 // The search root: --root wins, otherwise the current directory (design doc
@@ -236,9 +325,8 @@ int main(int argc, char** argv)
         if (inv.command == "config") {
             return run_config(inv.global, inv.argv);
         }
-        if (inv.command == "plugin" && inv.argv.size() >= 1 && inv.argv[0] == "doctor") {
-            return run_plugin_doctor(
-                inv.global, std::vector<std::string>(inv.argv.begin() + 1, inv.argv.end()));
+        if (inv.command == "plugin") {
+            return run_plugin(inv.global, inv.argv);
         }
 
         std::cerr << "kap: unknown command '" << inv.command << "'\n";

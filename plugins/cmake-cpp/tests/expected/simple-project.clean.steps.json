@@ -1,0 +1,7 @@
+{
+  "config": { "build_dir": "out" },
+  "steps": [
+    { "cmd": ["rm", "-rf", "out"] }
+  ],
+  "report_freed_space": true
+}

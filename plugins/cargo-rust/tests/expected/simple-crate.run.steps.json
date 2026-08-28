@@ -1,0 +1,8 @@
+{
+  "config": { "release": true },
+  "tools": ["cargo"],
+  "extra": ["--", "--verbose"],
+  "steps": [
+    { "cmd": ["cargo", "run", "--release", "--", "--verbose"] }
+  ]
+}

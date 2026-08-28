@@ -1,0 +1,5 @@
+# Fixture only: kap notices this file exists, it never parses it.
+[package]
+name = "simple"
+version = "0.1.0"
+edition = "2021"

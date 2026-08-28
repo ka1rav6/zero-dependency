@@ -1,14 +1,75 @@
+// cmake-cpp — build, test, and clean a CMake project.
+//
+// This is the worked example from design doc §5.3. Everything kap knows about
+// CMake lives in this file: the binary itself has no idea what a CMakeLists.txt
+// is. Read docs/design.md §5 for the language, or howto.md for a guided tour.
+
 manifest {
-  name = "cmake-cpp"
-  version = "1.0.0"
+  name        = "cmake-cpp"
+  version     = "1.0.0"
   api_version = 1
-  priority = 30
+  priority    = 30
+  composable  = false
+  supersedes  = []
 }
 
+// Which projects this plugin claims. Evaluated by the detection engine
+// (Milestone 4), never by the interpreter.
 detect {
   file_exists "CMakeLists.txt"
 }
 
+// Tools the commands below shell out to. `kap doctor` reports on these.
+requires {
+  any_of   [cmake]
+  optional [ninja, make, ccache]
+}
+
+// Everything a user may override in ~/.config/kap/config.toml or ./kap.toml.
+// The core validates overrides against these declarations before any KPL runs,
+// so a typo fails with a clear message rather than a confusing command line.
+schema {
+  generator:  enum { auto, ninja, make, unix_makefiles } = auto
+  build_dir:  str       = "build"
+  build_type: str       = "Debug"
+  cmake_args: list<str> = []
+}
+
 command build(project, config, extra) {
-  step ["cmake", "--build", "build"] + extra
+  let dir = config.build_dir
+
+  step mkdir "-p" dir
+
+  let configure = ["cmake", "-S", ".", "-B", dir]
+
+  // `auto` prefers Ninja when it is installed and otherwise says nothing at
+  // all, letting CMake pick its own platform default. `none` is how a KPL
+  // expression says "no value"; the flag below is simply not added.
+  let generator = match config.generator {
+    auto           => if project.tool("ninja") then "Ninja" else none,
+    ninja          => "Ninja",
+    make           => "Unix Makefiles",
+    unix_makefiles => "Unix Makefiles",
+  }
+
+  if generator != none {
+    configure = configure + ["-G", generator]
+  }
+
+  configure = configure + ["-DCMAKE_BUILD_TYPE=" + config.build_type]
+  configure = configure + config.cmake_args
+  step configure
+
+  // Passthrough arguments (everything after `--` on the command line) go to
+  // the build, not to the configure step: `kap build -- --target foo`.
+  step ["cmake", "--build", dir] + extra
+}
+
+command test(project, config, extra) {
+  step ["ctest", "--test-dir", config.build_dir, "--output-on-failure"] + extra
+}
+
+command clean(project, config) {
+  step rm "-rf" config.build_dir
+  report_freed_space
 }

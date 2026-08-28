@@ -1,0 +1,6 @@
+{
+  "tools": ["cargo"],
+  "steps": [
+    { "cmd": ["cargo", "build"] }
+  ]
+}
