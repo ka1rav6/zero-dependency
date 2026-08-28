@@ -689,8 +689,8 @@ std::vector<std::string> validate(const Plugin& plugin, int supported_api_versio
         return errors;
     }
 
-    bool has_name = false;
-    bool has_version = false;
+    bool has_name        = false;
+    bool has_version     = false;
     bool has_api_version = false;
     for (const Statement& statement : plugin.manifest->statements) {
         if (statement.kind != Statement::Kind::Assignment || statement.expressions.empty()) {
