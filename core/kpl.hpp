@@ -6,6 +6,7 @@
 // stream; the parser in kpl.cpp consumes the same public token types.
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -126,6 +127,65 @@ struct Plugin
     std::optional<Block> schema;
     std::vector<Command> commands;
 };
+
+struct Value
+{
+    enum class Kind
+    {
+        None,
+        String,
+        Integer,
+        Boolean,
+        List,
+        Record
+    };
+
+    Kind                         kind = Kind::None;
+    std::string                  string;
+    std::int64_t                 integer = 0;
+    bool                         boolean = false;
+    std::vector<Value>           list;
+    std::map<std::string, Value> record;
+
+    static Value none();
+    static Value string_value(std::string value);
+    static Value integer_value(std::int64_t value);
+    static Value boolean_value(bool value);
+    static Value list_value(std::vector<Value> value);
+    static Value record_value(std::map<std::string, Value> value);
+};
+
+struct Project
+{
+    std::string                           root;
+    std::vector<std::string>              matched_files;
+    std::function<bool(std::string_view)> exists;
+    std::function<bool(std::string_view)> tool;
+};
+
+struct Step
+{
+    std::vector<std::string>           command;
+    std::optional<std::string>         cwd;
+    std::map<std::string, std::string> environment;
+    std::optional<std::string>         label;
+};
+
+struct CommandSpec
+{
+    std::vector<Step> steps;
+    bool              concurrent         = false;
+    bool              report_freed_space = false;
+};
+
+// Evaluate one command without spawning a process. `config` and `extra` are
+// supplied by the host; project callbacks are the only filesystem/tool access
+// available to KPL.
+CommandSpec evaluate(const Plugin&                       plugin,
+                     std::string_view                    command_name,
+                     const Project&                      project,
+                     const std::map<std::string, Value>& config = {},
+                     const std::vector<std::string>&     extra  = {});
 
 // Validate the manifest contract used by the plugin loader. The parser keeps
 // blocks generic so later KPL features can evolve independently; this check
