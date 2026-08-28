@@ -1,0 +1,14 @@
+# tests/fixtures/config/kap.toml
+#
+# A tiny fixture the `kap config get` smoke test reads. Mirrors the
+# customization-layer example in design doc §5.12 — enough nested tables and
+# scalars to prove config lookup works end to end.
+
+[plugins.cmake-cpp]
+generator = "ninja"
+build_dir = "build"
+cmake_args = ["-DCMAKE_BUILD_TYPE=Debug"]
+
+[server]
+host = "localhost"
+port = 8080
