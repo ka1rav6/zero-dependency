@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/json.hpp"
+
 namespace kap::kpl
 {
 
@@ -243,6 +245,17 @@ CommandSpec evaluate(const Plugin&                       plugin,
                      const Project&                      project,
                      const std::map<std::string, Value>& config = {},
                      const std::vector<std::string>&     extra  = {});
+
+// The CommandSpec <-> JSON contract from design doc §5.4. This is the shape a
+// plugin's `tests/expected/*.steps.json` golden file is written in, and the
+// shape `--dry-run` will render from in Milestone 5.
+//
+// to_json always writes every field, including the null/empty defaults, so two
+// specs that behave identically serialize identically and can be compared as
+// text. spec_from_json is the inverse and treats the optional fields as
+// optional, so a golden file only has to spell out what it cares about.
+json::Value to_json(const CommandSpec& spec);
+CommandSpec spec_from_json(const json::Value& value, const std::string& source_name = {});
 
 // Validate the manifest contract used by the plugin loader. The parser keeps
 // blocks generic so later KPL features can evolve independently; this check

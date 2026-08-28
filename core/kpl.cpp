@@ -2519,6 +2519,116 @@ Project host_project(std::string root, std::vector<std::string> matched_files)
     return project;
 }
 
+json::Value to_json(const CommandSpec& spec)
+{
+    std::vector<json::Value> steps;
+    steps.reserve(spec.steps.size());
+    for (const Step& step : spec.steps) {
+        std::vector<json::Value> command;
+        command.reserve(step.command.size());
+        for (const std::string& word : step.command)
+            command.push_back(json::make_string(word));
+
+        std::map<std::string, json::Value> environment;
+        for (const auto& [name, value] : step.environment)
+            environment.emplace(name, json::make_string(value));
+
+        steps.push_back(json::make_object({
+            {"cmd", json::make_array(std::move(command))},
+            {"cwd", step.cwd ? json::make_string(*step.cwd) : json::make_null()},
+            {"env", json::make_object(std::move(environment))},
+            {"label", step.label ? json::make_string(*step.label) : json::make_null()},
+        }));
+    }
+    return json::make_object({
+        {"steps", json::make_array(std::move(steps))},
+        {"concurrent", json::make_boolean(spec.concurrent)},
+        {"report_freed_space", json::make_boolean(spec.report_freed_space)},
+    });
+}
+
+namespace
+{
+
+[[noreturn]] void json_shape_error(const std::string& message, const std::string& source_name)
+{
+    throw diag::Error{diag::error(message, diag::Location{source_name})};
+}
+
+// Read an optional boolean field, defaulting when absent so a golden file only
+// has to spell out what it cares about.
+bool optional_boolean(const json::Value& object,
+                      const char*        key,
+                      bool               fallback,
+                      const std::string& source_name)
+{
+    const json::Value* field = object.find(key);
+    if (field == nullptr || field->kind == json::Value::Kind::Null)
+        return fallback;
+    if (field->kind != json::Value::Kind::Boolean)
+        json_shape_error(std::string("'") + key + "' must be a boolean", source_name);
+    return field->boolean;
+}
+
+} // namespace
+
+CommandSpec spec_from_json(const json::Value& value, const std::string& source_name)
+{
+    if (value.kind != json::Value::Kind::Object)
+        json_shape_error("a CommandSpec must be a JSON object", source_name);
+
+    CommandSpec spec;
+    spec.concurrent         = optional_boolean(value, "concurrent", false, source_name);
+    spec.report_freed_space = optional_boolean(value, "report_freed_space", false, source_name);
+
+    const json::Value* steps = value.find("steps");
+    if (steps == nullptr)
+        json_shape_error("a CommandSpec requires a 'steps' array", source_name);
+    if (steps->kind != json::Value::Kind::Array)
+        json_shape_error("'steps' must be an array", source_name);
+
+    for (const json::Value& entry : steps->array) {
+        if (entry.kind != json::Value::Kind::Object)
+            json_shape_error("every step must be an object", source_name);
+
+        Step               step;
+        const json::Value* command = entry.find("cmd");
+        if (command == nullptr || command->kind != json::Value::Kind::Array)
+            json_shape_error("every step requires a 'cmd' array", source_name);
+        for (const json::Value& word : command->array) {
+            if (word.kind != json::Value::Kind::String)
+                json_shape_error("'cmd' must contain only strings", source_name);
+            step.command.push_back(word.string);
+        }
+        if (step.command.empty())
+            json_shape_error("'cmd' must not be empty", source_name);
+
+        for (const char* key : {"cwd", "label"}) {
+            const json::Value* field = entry.find(key);
+            if (field == nullptr || field->kind == json::Value::Kind::Null)
+                continue;
+            if (field->kind != json::Value::Kind::String)
+                json_shape_error(std::string("'") + key + "' must be a string or null",
+                                 source_name);
+            (std::string(key) == "cwd" ? step.cwd : step.label) = field->string;
+        }
+
+        const json::Value* environment = entry.find("env");
+        if (environment != nullptr && environment->kind != json::Value::Kind::Null) {
+            if (environment->kind != json::Value::Kind::Object)
+                json_shape_error("'env' must be an object", source_name);
+            for (const auto& [name, entry_value] : environment->object) {
+                if (entry_value.kind != json::Value::Kind::String)
+                    json_shape_error("'env' values must be strings", source_name);
+                step.environment[name] = entry_value.string;
+            }
+        }
+
+        spec.steps.push_back(std::move(step));
+    }
+    return spec;
+}
+
 std::vector<std::string> validate(const Plugin& plugin, int supported_api_version)
 {
     std::vector<std::string> errors;
