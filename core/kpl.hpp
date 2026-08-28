@@ -163,13 +163,35 @@ struct Value
     static Value record_value(std::map<std::string, Value> value);
 };
 
+// The read-only host object handed to every command block (design doc §3.4).
+//
+// Everything KPL can learn about the outside world arrives through these
+// callbacks, and nothing else: there is no raw filesystem API, no process
+// spawning, and no unfiltered environment access in the language. Making them
+// std::function rather than direct calls into core/fs.hpp is what lets the
+// unit tests drive the interpreter against a mocked project with no disk at
+// all (design doc Milestone 3), while production code uses host_project()
+// below.
+//
+// A callback left empty means "this capability is unavailable here". Queries
+// degrade to a safe answer (false / none / an empty list); `read` — where an
+// empty string would be indistinguishable from an empty file — raises instead.
 struct Project
 {
-    std::string                           root;
-    std::vector<std::string>              matched_files;
-    std::function<bool(std::string_view)> exists;
-    std::function<bool(std::string_view)> tool;
+    std::string              root;
+    std::vector<std::string> matched_files;
+
+    std::function<bool(std::string_view)>                       exists; // path -> bool
+    std::function<bool(std::string_view)>                       tool;   // PATH lookup
+    std::function<std::string(std::string_view)>                read;   // capped file read
+    std::function<std::vector<std::string>(std::string_view)>   glob;   // capped glob
+    std::function<std::optional<std::string>(std::string_view)> env;    // filtered env
 };
+
+// Build the production host object: reads sandboxed to `root`, a PATH scan for
+// `tool`, and a deny-listed environment lookup (design doc §7). `root` should
+// be an existing directory; a path that escapes it is refused, not clamped.
+Project host_project(std::string root, std::vector<std::string> matched_files = {});
 
 struct Step
 {

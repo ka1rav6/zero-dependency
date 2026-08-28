@@ -8,11 +8,16 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
 
+#include <unistd.h>
+
 #include "core/diag.hpp"
+#include "core/fs.hpp"
 
 namespace kap::kpl
 {
@@ -1174,10 +1179,9 @@ private:
     }
 
     // The host methods on `project` (design doc §3.4 / §5.8).
-    static bool is_project_method(std::string_view name)
+    static bool is_project_method(const std::string& name)
     {
-        return name == "exists" || name == "read" || name == "glob" || name == "tool" ||
-               name == "env";
+        return project_methods().count(name) != 0;
     }
 
     void require_boolean(StaticType type, const Token& token)
@@ -1186,20 +1190,103 @@ private:
             error("condition must be a boolean, got " + std::string(type_name(type)), token);
     }
 
+    // One signature table, shared by the checker and mirrored by the
+    // interpreter's dispatch. `Unknown` as a return type means "the lattice
+    // cannot express it" — `project.env` returns `str?`, which is a string or
+    // none depending on the environment.
+    struct Signature
+    {
+        std::vector<StaticType> parameters;
+        StaticType              result;
+    };
+
+    static const std::map<std::string, Signature>& project_methods()
+    {
+        static const std::map<std::string, Signature> kMethods = {
+            {"exists", {{StaticType::String}, StaticType::Boolean}},
+            {"tool", {{StaticType::String}, StaticType::Boolean}},
+            {"read", {{StaticType::String}, StaticType::String}},
+            {"glob", {{StaticType::String}, StaticType::ListString}},
+            {"env", {{StaticType::String}, StaticType::Unknown}},
+        };
+        return kMethods;
+    }
+
+    static const std::map<std::string, Signature>& stdlib_functions()
+    {
+        static const std::map<std::string, Signature> kFunctions = {
+            {"len", {{StaticType::ListUnknown}, StaticType::Integer}},
+            {"contains", {{StaticType::String, StaticType::String}, StaticType::Boolean}},
+            {"trim", {{StaticType::String}, StaticType::String}},
+            {"split", {{StaticType::String, StaticType::String}, StaticType::ListString}},
+        };
+        return kFunctions;
+    }
+
+    // Is `actual` acceptable where `expected` is declared? Unknown is the
+    // wildcard in both directions, and any list satisfies a `list` parameter.
+    static bool assignable(StaticType expected, StaticType actual)
+    {
+        if (expected == StaticType::Unknown || actual == StaticType::Unknown)
+            return true;
+        if (expected == StaticType::ListUnknown)
+            return actual == StaticType::ListString || actual == StaticType::ListInteger ||
+                   actual == StaticType::ListUnknown;
+        return expected == actual;
+    }
+
+    StaticType check_signature(const Signature&               signature,
+                               const std::string&             name,
+                               const std::vector<StaticType>& arguments,
+                               const Token&                   token)
+    {
+        if (arguments.size() != signature.parameters.size()) {
+            error("'" + name + "' takes " + std::to_string(signature.parameters.size()) +
+                      " argument" + (signature.parameters.size() == 1 ? "" : "s") + ", got " +
+                      std::to_string(arguments.size()),
+                  token);
+            return signature.result;
+        }
+        for (std::size_t index = 0; index < arguments.size(); ++index) {
+            if (assignable(signature.parameters[index], arguments[index]))
+                continue;
+            error("argument " + std::to_string(index + 1) + " of '" + name + "' must be " +
+                      std::string(type_name(signature.parameters[index])) + ", got " +
+                      std::string(type_name(arguments[index])),
+                  token);
+        }
+        return signature.result;
+    }
+
     StaticType call(const Expr& expr)
     {
-        const Expr& member = expr.children.front();
-        if (member.kind != Expr::Kind::Member || member.children.front().kind != Expr::Kind::Name ||
-            member.children.front().token.text != "project") {
-            error("only project host calls are allowed", expr.token);
-            return StaticType::Unknown;
+        const Expr& callee = expr.children.front();
+
+        std::vector<StaticType> arguments;
+        arguments.reserve(expr.children.size() - 1);
+        for (std::size_t index = 1; index < expr.children.size(); ++index)
+            arguments.push_back(expression(expr.children[index]));
+
+        if (callee.kind == Expr::Kind::Name) {
+            const auto found = stdlib_functions().find(callee.token.text);
+            if (found == stdlib_functions().end()) {
+                error("unknown function '" + callee.token.text + "'", callee.token);
+                return StaticType::Unknown;
+            }
+            return check_signature(found->second, callee.token.text, arguments, callee.token);
         }
-        if (expr.children.size() != 2 ||
-            (expr.children.size() == 2 && expression(expr.children[1]) != StaticType::String))
-            error("project host calls require one string argument", expr.token);
-        if (member.token.text != "tool" && member.token.text != "exists")
-            error("unknown project method '" + member.token.text + "'", member.token);
-        return StaticType::Boolean;
+        if (callee.kind == Expr::Kind::Member && callee.children.front().kind == Expr::Kind::Name &&
+            callee.children.front().token.text == "project") {
+            const auto found = project_methods().find(callee.token.text);
+            if (found == project_methods().end()) {
+                error("unknown project method '" + callee.token.text + "'", callee.token);
+                return StaticType::Unknown;
+            }
+            return check_signature(
+                found->second, "project." + callee.token.text, arguments, callee.token);
+        }
+        error("only project.* methods and stdlib functions can be called", expr.token);
+        return StaticType::Unknown;
     }
 
     void statement_check(const Statement& statement)
@@ -1562,19 +1649,151 @@ private:
         fail("incompatible operands", expr.token);
     }
 
+    // --- calls -------------------------------------------------------------
+    //
+    // KPL has no user-defined functions (design doc §5.8). The only callables
+    // are the `project.*` host methods and a fixed stdlib, which is what keeps
+    // the sandbox auditable: this function is the complete list of things a
+    // plugin can make the host do.
+
+    void
+    check_arity(const std::vector<Value>& arguments, std::size_t expected, const Token& name) const
+    {
+        if (arguments.size() != expected)
+            fail("'" + name.text + "' takes " + std::to_string(expected) + " argument" +
+                     (expected == 1 ? "" : "s") + ", got " + std::to_string(arguments.size()),
+                 name);
+    }
+
+    const std::string&
+    string_argument(const std::vector<Value>& arguments, std::size_t index, const Token& name) const
+    {
+        if (arguments[index].kind != Value::Kind::String)
+            fail("argument " + std::to_string(index + 1) + " of '" + name.text +
+                     "' must be a string, got " + kind_name(arguments[index].kind),
+                 name);
+        return arguments[index].string;
+    }
+
     Value call(const Expr& expr)
     {
-        const Expr& member = expr.children.front();
-        if (member.kind != Expr::Kind::Member || member.children.front().token.text != "project")
-            fail("only project host calls are allowed", expr.token);
-        if (expr.children.size() != 2 || expr.children[1].kind != Expr::Kind::String)
-            fail("project host calls require one string argument", expr.token);
-        const std::string argument = expr.children[1].token.text;
-        if (member.token.text == "tool")
-            return Value::boolean_value(project_->tool && project_->tool(argument));
-        if (member.token.text == "exists")
-            return Value::boolean_value(project_->exists && project_->exists(argument));
-        fail("unknown project method '" + member.token.text + "'", member.token);
+        const Expr& callee = expr.children.front();
+
+        // Arguments are ordinary expressions, evaluated before dispatch.
+        //
+        // The bug this replaces: the old implementation read the argument
+        // straight off the AST and required `expr.children[1].kind == String`,
+        // so only a *literal* could be passed. The design doc's own workspace
+        // example — `project.exists(ws + "/package.json")` (§5.9) — was
+        // rejected as "project host calls require one string argument".
+        std::vector<Value> arguments;
+        arguments.reserve(expr.children.size() - 1);
+        for (std::size_t index = 1; index < expr.children.size(); ++index)
+            arguments.push_back(expression(expr.children[index]));
+
+        if (callee.kind == Expr::Kind::Name)
+            return stdlib_call(callee.token, arguments);
+        if (callee.kind == Expr::Kind::Member && callee.children.front().kind == Expr::Kind::Name &&
+            callee.children.front().token.text == "project")
+            return project_call(callee.token, arguments);
+        fail("only project.* methods and stdlib functions can be called", expr.token);
+    }
+
+    // The `project` host methods (design doc §3.4). Each one is a capability:
+    // if the host did not supply the callback, the query answers safely rather
+    // than reaching for the disk behind the sandbox's back.
+    Value project_call(const Token& method, const std::vector<Value>& arguments)
+    {
+        if (method.text == "exists") {
+            check_arity(arguments, 1, method);
+            const std::string& path = string_argument(arguments, 0, method);
+            return Value::boolean_value(project_->exists && project_->exists(path));
+        }
+        if (method.text == "tool") {
+            check_arity(arguments, 1, method);
+            const std::string& name = string_argument(arguments, 0, method);
+            return Value::boolean_value(project_->tool && project_->tool(name));
+        }
+        if (method.text == "read") {
+            check_arity(arguments, 1, method);
+            const std::string& path = string_argument(arguments, 0, method);
+            // No safe default: "" is indistinguishable from an empty file, so
+            // a missing capability has to be reported rather than guessed.
+            if (!project_->read)
+                fail("project.read is not available here", method);
+            return Value::string_value(project_->read(path));
+        }
+        if (method.text == "glob") {
+            check_arity(arguments, 1, method);
+            const std::string& pattern = string_argument(arguments, 0, method);
+            if (!project_->glob)
+                return Value::list_value({});
+            return strings_to_value(project_->glob(pattern));
+        }
+        if (method.text == "env") {
+            check_arity(arguments, 1, method);
+            const std::string& name = string_argument(arguments, 0, method);
+            if (!project_->env)
+                return Value::none();
+            // `str?`: an unset (or deny-listed) variable reads as `none`, so
+            // plugins branch on it with `!= none` rather than on "".
+            const std::optional<std::string> value = project_->env(name);
+            return value ? Value::string_value(*value) : Value::none();
+        }
+        fail("unknown project method '" + method.text + "'", method);
+    }
+
+    // The free-function stdlib (design doc §5.8). Four functions, no more:
+    // every addition here widens what a third-party plugin can do.
+    Value stdlib_call(const Token& name, const std::vector<Value>& arguments)
+    {
+        if (name.text == "len") {
+            check_arity(arguments, 1, name);
+            if (arguments[0].kind != Value::Kind::List)
+                fail("'len' requires a list, got " + std::string(kind_name(arguments[0].kind)),
+                     name);
+            return Value::integer_value(static_cast<std::int64_t>(arguments[0].list.size()));
+        }
+        if (name.text == "contains") {
+            check_arity(arguments, 2, name);
+            const std::string& haystack = string_argument(arguments, 0, name);
+            const std::string& needle   = string_argument(arguments, 1, name);
+            return Value::boolean_value(haystack.find(needle) != std::string::npos);
+        }
+        if (name.text == "trim") {
+            check_arity(arguments, 1, name);
+            const std::string& text  = string_argument(arguments, 0, name);
+            const auto         space = [](unsigned char c) { return std::isspace(c) != 0; };
+            std::size_t        begin = 0;
+            std::size_t        end   = text.size();
+            while (begin < end && space(static_cast<unsigned char>(text[begin])))
+                ++begin;
+            while (end > begin && space(static_cast<unsigned char>(text[end - 1])))
+                --end;
+            return Value::string_value(text.substr(begin, end - begin));
+        }
+        if (name.text == "split") {
+            check_arity(arguments, 2, name);
+            const std::string& text      = string_argument(arguments, 0, name);
+            const std::string& separator = string_argument(arguments, 1, name);
+            // An empty separator has no sensible answer (every position is a
+            // match), and silently returning the input would hide the mistake.
+            if (separator.empty())
+                fail("'split' requires a non-empty separator", name);
+            std::vector<Value> parts;
+            std::size_t        begin = 0;
+            for (;;) {
+                const std::size_t hit = text.find(separator, begin);
+                if (hit == std::string::npos) {
+                    parts.push_back(Value::string_value(text.substr(begin)));
+                    break;
+                }
+                parts.push_back(Value::string_value(text.substr(begin, hit - begin)));
+                begin = hit + separator.size();
+            }
+            return Value::list_value(std::move(parts));
+        }
+        fail("unknown function '" + name.text + "'", name);
     }
 
     void statement_run(const Statement& statement)
@@ -1640,6 +1859,153 @@ CommandSpec evaluate(const Plugin&                       plugin,
             return Evaluator{plugin.source_name, project, config, extra}.run(command);
     }
     throw diag::Error{diag::error("unknown command '" + std::string(command_name) + "'")};
+}
+
+namespace
+{
+
+// --- the production host object (design doc §3.4 + §7) -----------------------
+
+// Resolve a plugin-supplied path against the project root and refuse anything
+// that leaves it.
+//
+// `weakly_canonical` inside fs::is_within resolves both `..` components and
+// symlinks, so neither "../../etc/passwd" nor a symlink planted in the project
+// can be used to read outside the tree. The check is here, once, rather than
+// in each callback, because "every path a plugin names is validated" is only a
+// guarantee if there is exactly one door.
+std::optional<std::filesystem::path> resolve_in_root(const std::filesystem::path& root,
+                                                     std::string_view             relative)
+{
+    if (relative.empty())
+        return std::nullopt;
+    const std::filesystem::path candidate = root / std::filesystem::path(relative);
+    if (!fs::is_within(root, candidate))
+        return std::nullopt;
+    return candidate;
+}
+
+// Is `name` an environment variable a plugin may read?
+//
+// A deny-list, not an allow-list, because plugins legitimately need arbitrary
+// build-related variables (CC, CFLAGS, NODE_ENV, ...) and we cannot enumerate
+// them. The patterns cover the shapes secrets actually take in CI
+// environments; design doc §7 names the first three and leaves the list open.
+bool environment_is_readable(std::string_view name)
+{
+    static constexpr std::string_view kDeniedSuffixes[] = {
+        "_TOKEN", "_KEY", "_SECRET", "_PASSWORD", "_PASSWD", "_CREDENTIALS", "_SESSION"};
+    static constexpr std::string_view kDeniedPrefixes[] = {"AWS_", "GITHUB_TOKEN", "NPM_TOKEN"};
+
+    std::string upper(name);
+    for (char& character : upper)
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+
+    for (const std::string_view suffix : kDeniedSuffixes)
+        if (upper.size() >= suffix.size() &&
+            upper.compare(upper.size() - suffix.size(), suffix.size(), suffix) == 0)
+            return false;
+    for (const std::string_view prefix : kDeniedPrefixes)
+        if (upper.rfind(prefix, 0) == 0)
+            return false;
+    return true;
+}
+
+// Is `name` an executable on PATH? Answers without spawning anything — design
+// doc §5.8 specifies "checks PATH without exec".
+bool tool_on_path(std::string_view name)
+{
+    // A name with a slash is a path, not a PATH lookup; refuse it rather than
+    // silently probing an absolute location a plugin should not be naming.
+    if (name.empty() || name.find('/') != std::string_view::npos)
+        return false;
+    const char* path = std::getenv("PATH");
+    if (path == nullptr)
+        return false;
+
+    const std::string_view search(path);
+    std::size_t            begin = 0;
+    while (begin <= search.size()) {
+        const std::size_t      end     = search.find(':', begin);
+        const std::string_view segment = search.substr(
+            begin, end == std::string_view::npos ? std::string_view::npos : end - begin);
+        // POSIX: an empty PATH element means the current directory.
+        const std::filesystem::path directory =
+            segment.empty() ? "." : std::filesystem::path(segment);
+        const std::filesystem::path candidate = directory / std::filesystem::path(name);
+        if (::access(candidate.c_str(), X_OK) == 0 && fs::is_file(candidate))
+            return true;
+        if (end == std::string_view::npos)
+            break;
+        begin = end + 1;
+    }
+    return false;
+}
+
+} // namespace
+
+Project host_project(std::string root, std::vector<std::string> matched_files)
+{
+    Project project;
+    project.root          = root;
+    project.matched_files = std::move(matched_files);
+
+    const std::filesystem::path base(root);
+
+    project.exists = [base](std::string_view path) {
+        const auto resolved = resolve_in_root(base, path);
+        return resolved.has_value() && fs::exists(*resolved);
+    };
+
+    project.read = [base](std::string_view path) -> std::string {
+        const auto resolved = resolve_in_root(base, path);
+        if (!resolved)
+            throw diag::Error{
+                diag::error("project.read('" + std::string(path) + "') escapes the project root")};
+        // fs::read_text applies the 1 MiB cap from design doc §7.
+        return fs::read_text(*resolved);
+    };
+
+    project.glob = [base](std::string_view pattern) -> std::vector<std::string> {
+        // Patterns are "<directory>/<name-pattern>"; only the final component
+        // may contain wildcards, which is all §5.11's "packages/*" needs and
+        // keeps the walk bounded to a single directory.
+        const std::size_t      slash = pattern.rfind('/');
+        const std::string_view relative =
+            slash == std::string_view::npos ? std::string_view{} : pattern.substr(0, slash);
+        const std::string_view leaf =
+            slash == std::string_view::npos ? pattern : pattern.substr(slash + 1);
+
+        std::filesystem::path directory = base;
+        if (!relative.empty()) {
+            const auto resolved = resolve_in_root(base, relative);
+            if (!resolved)
+                return {};
+            directory = *resolved;
+        }
+
+        std::vector<std::string> names = fs::glob(directory, leaf);
+        if (relative.empty())
+            return names;
+        // Re-attach the directory so results stay usable as project-relative
+        // paths, which is what §5.11 feeds straight back into project.exists.
+        for (std::string& name : names)
+            name = std::string(relative) + "/" + name;
+        return names;
+    };
+
+    project.tool = [](std::string_view name) { return tool_on_path(name); };
+
+    project.env = [](std::string_view name) -> std::optional<std::string> {
+        if (!environment_is_readable(name))
+            return std::nullopt;
+        const char* value = std::getenv(std::string(name).c_str());
+        if (value == nullptr)
+            return std::nullopt;
+        return std::string(value);
+    };
+
+    return project;
 }
 
 std::vector<std::string> validate(const Plugin& plugin, int supported_api_version)

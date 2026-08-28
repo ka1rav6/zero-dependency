@@ -7,6 +7,36 @@
 #include "harness.hpp"
 
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+#include <unistd.h>
+
+namespace
+{
+
+// A throwaway project tree unique to this process, used by the host_project
+// tests below. Mirrors the helper in tests/test_fs.cpp; kept local rather than
+// shared so a change to one file's fixtures cannot break the other's.
+std::filesystem::path scratch_project(const std::string& name)
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() /
+                                      ("kap_kpl_" + name + "_" + std::to_string(getpid()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+void write_file(const std::filesystem::path& path, const std::string& contents)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary);
+    out << contents;
+}
+
+} // namespace
 
 KAP_TEST("KPL lexer handles comments, literals, and operators")
 {
@@ -110,21 +140,21 @@ KAP_TEST("KPL manifest validation reports missing and newer fields")
 
 KAP_TEST("KPL evaluator builds steps from config, project, and extra args")
 {
-    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {"
-                                                     " let dir = config.build_dir"
-                                                     " if project.tool(\"ninja\") { step \"ninja\" dir }"
-                                                     " else { step \"make\" dir }"
-                                                     " step [\"test\"] + extra"
-                                                     "}");
-    const kap::kpl::Project project{.root          = "/tmp/project",
-                                    .matched_files = {"CMakeLists.txt"},
-                                    .exists        = {},
-                                    .tool = [](std::string_view name) { return name == "ninja"; }};
-    const auto              spec = kap::kpl::evaluate(plugin,
+    const auto        plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                               " let dir = config.build_dir"
+                                               " if project.tool(\"ninja\") { step \"ninja\" dir }"
+                                               " else { step \"make\" dir }"
+                                               " step [\"test\"] + extra"
+                                               "}");
+    kap::kpl::Project project;
+    project.root          = "/tmp/project";
+    project.matched_files = {"CMakeLists.txt"};
+    project.tool          = [](std::string_view name) { return name == "ninja"; };
+    const auto spec       = kap::kpl::evaluate(plugin,
                                          "build",
                                          project,
-                                                      {{"build_dir", kap::kpl::Value::string_value("out")}},
-                                                      {"--release"});
+                                               {{"build_dir", kap::kpl::Value::string_value("out")}},
+                                               {"--release"});
 
     KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
     KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("ninja"));
@@ -226,16 +256,17 @@ KAP_TEST("KPL evaluator short-circuits && and || without evaluating the right si
     // `project.tool` is the only observable side effect available here: if the
     // right operand were evaluated, the missing-tool lookup would still run.
     // Counting lookups proves the short circuit actually happened.
-    int                     lookups = 0;
-    const auto              plugin  = kap::kpl::parse("command build(project, config, extra) {"
-                                                      " if false && project.tool(\"ninja\") { step \"no\" }"
-                                                      " if true || project.tool(\"ninja\") { step \"yes\" }"
-                                                      "}");
-    const kap::kpl::Project project{
-        .root = "/tmp", .matched_files = {}, .exists = {}, .tool = [&lookups](std::string_view) {
-            ++lookups;
-            return true;
-        }};
+    int               lookups = 0;
+    const auto        plugin  = kap::kpl::parse("command build(project, config, extra) {"
+                                                " if false && project.tool(\"ninja\") { step \"no\" }"
+                                                " if true || project.tool(\"ninja\") { step \"yes\" }"
+                                                "}");
+    kap::kpl::Project project;
+    project.root = "/tmp";
+    project.tool = [&lookups](std::string_view) {
+        ++lookups;
+        return true;
+    };
     const auto spec = kap::kpl::evaluate(plugin, "build", project);
 
     KAP_ASSERT_EQ(lookups, 0);
@@ -413,4 +444,182 @@ KAP_TEST("KPL type checker rejects iterating a non-list")
     const auto errors = kap::kpl::type_check(plugin);
     KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(errors[0].find("for loop requires a list") != std::string::npos);
+});
+
+// --- Host builtins (design doc §5.8) ---------------------------------------------
+
+KAP_TEST("KPL evaluates host call arguments as expressions")
+{
+    // Regression: the evaluator read the argument off the AST and demanded a
+    // literal, so the design doc's own workspace idiom
+    // `project.exists(ws + "/package.json")` was rejected.
+    const auto        plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                               "  let dir = \"packages/app\""
+                                               "  if project.exists(dir + \"/package.json\") {"
+                                               "    step \"npm\" \"run\" \"build\""
+                                               "  }"
+                                               "}");
+    kap::kpl::Project project;
+    project.exists = [](std::string_view path) { return path == "packages/app/package.json"; };
+
+    const auto spec = kap::kpl::evaluate(plugin, "build", project);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("npm"));
+});
+
+KAP_TEST("KPL exposes project.read, project.glob, and project.env")
+{
+    const auto        plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                               "  step \"read\" trim(project.read(\"VERSION\"))"
+                                               "  step [\"glob\"] + project.glob(\"packages/*\")"
+                                               "  if project.env(\"CI\") != none {"
+                                               "    step \"ci\" project.env(\"CI\")"
+                                               "  }"
+                                               "  if project.env(\"MISSING\") == none { step \"unset\" }"
+                                               "}");
+    kap::kpl::Project project;
+    project.read = [](std::string_view) { return std::string("  1.2.3\n"); };
+    project.glob = [](std::string_view) {
+        return std::vector<std::string>{"packages/a", "packages/b"};
+    };
+    project.env = [](std::string_view name) -> std::optional<std::string> {
+        if (name == "CI")
+            return std::string("true");
+        return std::nullopt;
+    };
+
+    const auto spec = kap::kpl::evaluate(plugin, "build", project);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT_EQ(spec.steps[0].command[1], std::string("1.2.3"));
+    KAP_ASSERT_EQ(spec.steps[1].command.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(spec.steps[1].command[2], std::string("packages/b"));
+    KAP_ASSERT_EQ(spec.steps[2].command[1], std::string("true"));
+    KAP_ASSERT_EQ(spec.steps[3].command[0], std::string("unset"));
+});
+
+KAP_TEST("KPL stdlib provides len, contains, trim, and split")
+{
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                                     "  if len(extra) == 2 { step \"two\" }"
+                                                     "  if contains(\"a-b-c\", \"-b-\") { step \"contains\" }"
+                                                     "  step \"trim\" trim(\"\\t pad \\n\")"
+                                                     "  step [\"split\"] + split(\"a:b:c\", \":\")"
+                                                     "}");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project, {}, {"x", "y"});
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("two"));
+    KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("contains"));
+    KAP_ASSERT_EQ(spec.steps[2].command[1], std::string("pad"));
+    KAP_ASSERT_EQ(spec.steps[3].command.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT_EQ(spec.steps[3].command[3], std::string("c"));
+});
+
+KAP_TEST("KPL rejects unknown functions and wrong call arities")
+{
+    const auto plugin = kap::kpl::parse("command build(project, config, extra) {"
+                                        "  step trim(\"a\", \"b\")"
+                                        "  step upper(\"a\")"
+                                        "  step project.explode(\"a\")"
+                                        "  if len(\"not a list\") == 0 { step \"x\" }"
+                                        "}");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT(errors[0].find("takes 1 argument") != std::string::npos);
+    KAP_ASSERT(errors[1].find("unknown function 'upper'") != std::string::npos);
+    KAP_ASSERT(errors[2].find("unknown project method 'explode'") != std::string::npos);
+    KAP_ASSERT(errors[3].find("must be list") != std::string::npos);
+});
+
+KAP_TEST("KPL reports missing host capabilities instead of guessing")
+{
+    // An unset `read` callback cannot answer "" — that is indistinguishable
+    // from an empty file — so it raises. Query-shaped capabilities degrade
+    // safely instead.
+    const auto reader = kap::kpl::parse("command build(project) { step project.read(\"x\") }");
+    const auto querier =
+        kap::kpl::parse("command build(project) { if !project.exists(\"x\") { step \"absent\" } }");
+    const kap::kpl::Project project{};
+
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(reader, "build", project));
+    const auto spec = kap::kpl::evaluate(querier, "build", project);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+});
+
+// --- The production host object (design doc §3.4 + §7) ---------------------------
+
+KAP_TEST("host_project reads, globs, and probes inside the project root")
+{
+    const std::filesystem::path root = scratch_project("host");
+    write_file(root / "VERSION", "1.2.3\n");
+    write_file(root / "packages" / "app" / "package.json", "{}");
+    write_file(root / "packages" / "lib" / "package.json", "{}");
+
+    const kap::kpl::Project project = kap::kpl::host_project(root.string(), {"VERSION"});
+
+    KAP_ASSERT(project.exists("VERSION"));
+    KAP_ASSERT(project.exists("packages/app"));
+    KAP_ASSERT(!project.exists("nope"));
+    KAP_ASSERT_EQ(project.read("VERSION"), std::string("1.2.3\n"));
+
+    const std::vector<std::string> workspaces = project.glob("packages/*");
+    KAP_ASSERT_EQ(workspaces.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(workspaces[0], std::string("packages/app"));
+    KAP_ASSERT(project.exists(workspaces[1] + "/package.json"));
+
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("host_project refuses paths that escape the project root")
+{
+    const std::filesystem::path root = scratch_project("escape");
+    write_file(root.parent_path() / "kap_outside_secret.txt", "secret");
+
+    const kap::kpl::Project project = kap::kpl::host_project(root.string());
+
+    KAP_ASSERT(!project.exists("../kap_outside_secret.txt"));
+    KAP_ASSERT(!project.exists("/etc/passwd"));
+    KAP_ASSERT_THROWS(kap::diag::Error, project.read("../kap_outside_secret.txt"));
+    KAP_ASSERT(project.glob("../*").empty());
+
+    std::filesystem::remove_all(root);
+    std::filesystem::remove(root.parent_path() / "kap_outside_secret.txt");
+});
+
+KAP_TEST("host_project filters secret-shaped environment variables")
+{
+    // Design doc §7: a deny-list, so ordinary build variables stay readable
+    // while anything shaped like a credential does not.
+    ::setenv("KAP_TEST_PLAIN", "visible", 1);
+    ::setenv("KAP_TEST_API_TOKEN", "secret", 1);
+    ::setenv("KAP_TEST_SIGNING_KEY", "secret", 1);
+    ::setenv("AWS_ACCESS_KEY_ID", "secret", 1);
+
+    const kap::kpl::Project project = kap::kpl::host_project(".");
+
+    KAP_ASSERT(project.env("KAP_TEST_PLAIN").has_value());
+    KAP_ASSERT_EQ(*project.env("KAP_TEST_PLAIN"), std::string("visible"));
+    KAP_ASSERT(!project.env("KAP_TEST_API_TOKEN").has_value());
+    KAP_ASSERT(!project.env("KAP_TEST_SIGNING_KEY").has_value());
+    KAP_ASSERT(!project.env("AWS_ACCESS_KEY_ID").has_value());
+    KAP_ASSERT(!project.env("KAP_TEST_UNSET_VARIABLE").has_value());
+
+    ::unsetenv("KAP_TEST_PLAIN");
+    ::unsetenv("KAP_TEST_API_TOKEN");
+    ::unsetenv("KAP_TEST_SIGNING_KEY");
+    ::unsetenv("AWS_ACCESS_KEY_ID");
+});
+
+KAP_TEST("host_project resolves tools on PATH without executing them")
+{
+    const kap::kpl::Project project = kap::kpl::host_project(".");
+
+    // /bin/sh is mandated by POSIX, so `sh` is on PATH anywhere these tests
+    // can run at all.
+    KAP_ASSERT(project.tool("sh"));
+    KAP_ASSERT(!project.tool("kap_definitely_not_a_real_tool"));
+    // A name containing a path separator is not a PATH lookup and is refused
+    // rather than probed.
+    KAP_ASSERT(!project.tool("/bin/sh"));
 });
