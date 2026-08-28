@@ -939,7 +939,7 @@ diagnostics with line numbers. ✅
 ### Milestone 3 — KPL type-checker + interpreter
 **Goal:** Evaluate `command` blocks and produce `CommandSpec` JSON.
 
-- [ ] Schema validation (config record construction)
+- [x] Schema validation (config record construction)
 - [ ] Type checker for expressions and `step` statements
 - [x] Tree-walk interpreter with `project` host object (mocked in tests)
 - [x] `report_freed_space`, `concurrent` modifiers

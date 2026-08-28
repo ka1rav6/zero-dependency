@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace kap::kpl
@@ -100,6 +101,7 @@ struct Statement
     Kind                     kind = Kind::Expression;
     Token                    token;
     std::string              name;
+    std::string              type_name;
     std::vector<std::string> names;
     std::vector<Expr>        expressions;
     std::vector<Statement>   body;
@@ -177,6 +179,20 @@ struct CommandSpec
     bool              concurrent         = false;
     bool              report_freed_space = false;
 };
+
+struct SchemaField
+{
+    std::string              name;
+    std::string              type;
+    std::vector<std::string> enum_values;
+    std::optional<Value>     default_value;
+};
+
+// Read the schema declarations and merge overrides on top of their defaults.
+// Errors are returned instead of thrown so callers can report every bad key.
+std::vector<SchemaField> schema(const Plugin& plugin);
+std::pair<std::map<std::string, Value>, std::vector<std::string>>
+build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides);
 
 // Evaluate one command without spawning a process. `config` and `extra` are
 // supplied by the host; project callbacks are the only filesystem/tool access

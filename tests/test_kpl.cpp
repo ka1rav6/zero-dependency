@@ -146,3 +146,33 @@ KAP_TEST("KPL evaluator applies concurrent and freed-space modifiers")
     KAP_ASSERT(spec.report_freed_space);
     KAP_ASSERT_EQ(spec.steps[0].command[2], std::string("build"));
 });
+
+KAP_TEST("KPL schema builds typed defaults and accepts overrides")
+{
+    const auto plugin = kap::kpl::parse(
+        "schema { mode: enum { auto, ninja } = auto retries: int = 2 "
+        "release: bool = false args: list<str> = [] }");
+    const auto fields = kap::kpl::schema(plugin);
+    KAP_ASSERT_EQ(fields.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT_EQ(fields[3].type, "list<str>");
+
+    const auto [config, errors] = kap::kpl::build_config(
+        plugin, {{"mode", kap::kpl::Value::string_value("ninja")},
+                 {"release", kap::kpl::Value::boolean_value(true)}});
+    KAP_ASSERT(errors.empty());
+    KAP_ASSERT_EQ(config.at("mode").string, "ninja");
+    KAP_ASSERT_EQ(config.at("retries").integer, static_cast<std::int64_t>(2));
+    KAP_ASSERT(config.at("release").boolean);
+});
+
+KAP_TEST("KPL schema rejects unknown and incorrectly typed config")
+{
+    const auto plugin = kap::kpl::parse("schema { release: bool = false }");
+    const auto [config, errors] = kap::kpl::build_config(
+        plugin, {{"release", kap::kpl::Value::string_value("yes")},
+                 {"unknown", kap::kpl::Value::integer_value(1)}});
+    KAP_ASSERT(config.at("release").boolean == false);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT(errors[0].find("unknown config key") != std::string::npos ||
+               errors[1].find("unknown config key") != std::string::npos);
+});

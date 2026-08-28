@@ -7,6 +7,7 @@
 
 #include <cctype>
 #include <charconv>
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
@@ -474,6 +475,7 @@ private:
                 Expr type;
                 type.kind  = Expr::Kind::Name;
                 type.token = tokens_[position_++];
+                result.type_name = type.token.text;
                 result.expressions.push_back(std::move(type));
             } else {
                 result.expressions.push_back(expression());
@@ -487,7 +489,7 @@ private:
                 }
                 consume(TokenKind::RightBrace, "expected '}' after enum members");
             } else if (result.expressions.back().token.text == "list" && match(TokenKind::Less)) {
-                consume(TokenKind::Identifier, "expected list element type");
+                result.type_name += "<" + consume(TokenKind::Identifier, "expected list element type").text + ">";
                 consume(TokenKind::Greater, "expected '>' after list element type");
             }
             if (match(TokenKind::Equal))
@@ -748,6 +750,126 @@ Value Value::record_value(std::map<std::string, Value> value)
     result.kind   = Kind::Record;
     result.record = std::move(value);
     return result;
+}
+
+namespace
+{
+
+bool schema_value_matches(const Value& value, std::string_view type,
+                          const std::vector<std::string>& enum_values)
+{
+    if (type == "str")
+        return value.kind == Value::Kind::String;
+    if (type == "int")
+        return value.kind == Value::Kind::Integer;
+    if (type == "bool")
+        return value.kind == Value::Kind::Boolean;
+    if (type == "list<str>" || type == "list<int>") {
+        if (value.kind != Value::Kind::List)
+            return false;
+        const Value::Kind element_kind = type == "list<str>" ? Value::Kind::String
+                                                               : Value::Kind::Integer;
+        for (const Value& element : value.list)
+            if (element.kind != element_kind)
+                return false;
+        return true;
+    }
+    if (type == "enum") {
+        if (value.kind != Value::Kind::String)
+            return false;
+        return std::find(enum_values.begin(), enum_values.end(), value.string) != enum_values.end();
+    }
+    return false;
+}
+
+} // namespace
+
+std::vector<SchemaField> schema(const Plugin& plugin)
+{
+    std::vector<SchemaField> fields;
+    if (!plugin.schema)
+        return fields;
+    for (const Statement& statement : plugin.schema->statements) {
+        if (statement.kind != Statement::Kind::Assignment || statement.expressions.empty())
+            continue;
+        SchemaField field;
+        field.name = statement.name;
+        field.type = statement.type_name.empty() ? statement.expressions.front().token.text
+                                                  : statement.type_name;
+        if (field.type == "enum")
+            field.enum_values = statement.names;
+        if (statement.expressions.size() == 2) {
+            const Expr& value = statement.expressions.back();
+            switch (value.kind) {
+                case Expr::Kind::String:
+                    field.default_value = Value::string_value(value.token.text);
+                    break;
+                case Expr::Kind::Integer:
+                    field.default_value = Value::integer_value(value.token.integer);
+                    break;
+                case Expr::Kind::Boolean:
+                    field.default_value = Value::boolean_value(value.token.text == "true");
+                    break;
+                case Expr::Kind::None:
+                    field.default_value = Value::none();
+                    break;
+                case Expr::Kind::Name:
+                    if (field.type == "enum")
+                        field.default_value = Value::string_value(value.token.text);
+                    break;
+                case Expr::Kind::List: {
+                    std::vector<Value> values;
+                    for (const Expr& child : value.children) {
+                        if (child.kind == Expr::Kind::String)
+                            values.push_back(Value::string_value(child.token.text));
+                        else if (child.kind == Expr::Kind::Integer)
+                            values.push_back(Value::integer_value(child.token.integer));
+                    }
+                    if (values.size() == value.children.size())
+                        field.default_value = Value::list_value(std::move(values));
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        fields.push_back(std::move(field));
+    }
+    return fields;
+}
+
+std::pair<std::map<std::string, Value>, std::vector<std::string>>
+build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides)
+{
+    std::map<std::string, Value> result;
+    std::vector<std::string>     errors;
+    const auto                   fields = schema(plugin);
+    std::map<std::string, const SchemaField*> known;
+    for (const SchemaField& field : fields) {
+        if (!known.emplace(field.name, &field).second) {
+            errors.push_back("duplicate schema field '" + field.name + "'");
+            continue;
+        }
+        if (!field.default_value)
+            errors.push_back("schema field '" + field.name + "' requires a default");
+        else if (!schema_value_matches(*field.default_value, field.type, field.enum_values))
+            errors.push_back("default for schema field '" + field.name + "' has type " + field.type);
+        else
+            result[field.name] = *field.default_value;
+    }
+    for (const auto& [name, value] : overrides) {
+        const auto found = known.find(name);
+        if (found == known.end()) {
+            errors.push_back("unknown config key '" + name + "'");
+            continue;
+        }
+        if (!schema_value_matches(value, found->second->type, found->second->enum_values)) {
+            errors.push_back("config key '" + name + "' must be " + found->second->type);
+            continue;
+        }
+        result[name] = value;
+    }
+    return {std::move(result), std::move(errors)};
 }
 
 namespace
