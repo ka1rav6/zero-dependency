@@ -792,3 +792,66 @@ KAP_TEST("KPL match requires at least one arm")
     KAP_ASSERT_THROWS(kap::diag::Error,
                       kap::kpl::parse("command build(config) { step match config.mode { } }"));
 });
+
+// --- The record step form (design doc §5.4) --------------------------------------
+
+KAP_TEST("KPL record steps carry cwd, label, and env")
+{
+    // Design doc §5.11's workspace `dev`: the record form is the only way to
+    // reach a step's cwd and label, which the executor needs for concurrent
+    // prefixed output.
+    const auto plugin =
+        kap::kpl::parse("command dev(project, config, extra) {"
+                        "  concurrent true"
+                        "  for ws in project.glob(\"packages/*\") {"
+                        "    step { cmd: [\"npm\", \"run\", \"dev\"], cwd: ws, label: ws,"
+                        "           env: { NODE_ENV: \"development\" } }"
+                        "  }"
+                        "}");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+
+    kap::kpl::Project project;
+    project.glob = [](std::string_view) {
+        return std::vector<std::string>{"packages/api", "packages/web"};
+    };
+
+    const auto spec = kap::kpl::evaluate(plugin, "dev", project);
+    KAP_ASSERT(spec.concurrent);
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(spec.steps[0].command.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT(spec.steps[0].cwd.has_value());
+    KAP_ASSERT_EQ(*spec.steps[0].cwd, std::string("packages/api"));
+    KAP_ASSERT(spec.steps[1].label.has_value());
+    KAP_ASSERT_EQ(*spec.steps[1].label, std::string("packages/web"));
+    KAP_ASSERT_EQ(spec.steps[0].environment.at("NODE_ENV"), std::string("development"));
+});
+
+KAP_TEST("KPL record steps default cwd, label, and env to unset")
+{
+    const auto plugin =
+        kap::kpl::parse("command build(project) { step { cmd: [\"cmake\", \"--build\", \".\"] } }");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(!spec.steps[0].cwd.has_value());
+    KAP_ASSERT(!spec.steps[0].label.has_value());
+    KAP_ASSERT(spec.steps[0].environment.empty());
+});
+
+KAP_TEST("KPL rejects malformed record steps")
+{
+    const auto misspelled =
+        kap::kpl::parse("command build(project) { step { cmd: [\"x\"], cdw: \"y\" } }");
+    const auto errors = kap::kpl::type_check(misspelled);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(errors[0].find("unknown step field 'cdw'") != std::string::npos);
+
+    const auto no_command = kap::kpl::parse("command build(project) { step { cwd: \"y\" } }");
+    KAP_ASSERT(!kap::kpl::type_check(no_command).empty());
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(no_command, "build", project));
+
+    const auto mixed = kap::kpl::parse("command build(project) { step \"a\" { cmd: [\"x\"] } }");
+    KAP_ASSERT(!kap::kpl::type_check(mixed).empty());
+});

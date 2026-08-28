@@ -1422,6 +1422,65 @@ private:
         return StaticType::Unknown;
     }
 
+    // The record form of `step` (design doc §5.4) is checked field by field
+    // rather than as a generic record, so a misspelled `cwd` is caught at
+    // plugin-load time instead of being silently dropped at run time.
+    void step_record_check(const Expr& record)
+    {
+        bool has_command = false;
+        for (std::size_t index = 0; index < record.names.size(); ++index) {
+            const std::string& field = record.names[index];
+            const Expr&        value = record.children[index];
+            const StaticType   type  = expression(value);
+            if (field == "cmd") {
+                has_command = true;
+                if (type != StaticType::ListString && type != StaticType::Unknown &&
+                    type != StaticType::ListUnknown)
+                    error("step field 'cmd' must be list<string>, got " +
+                              std::string(type_name(type)),
+                          value.token);
+            } else if (field == "cwd" || field == "label") {
+                if (type != StaticType::String && type != StaticType::Unknown)
+                    error("step field '" + field + "' must be a string, got " +
+                              std::string(type_name(type)),
+                          value.token);
+            } else if (field == "env") {
+                if (type != StaticType::Record && type != StaticType::Unknown)
+                    error("step field 'env' must be a record, got " + std::string(type_name(type)),
+                          value.token);
+            } else {
+                error("unknown step field '" + field + "'; expected cmd, cwd, env, or label",
+                      value.token);
+            }
+        }
+        if (!has_command)
+            error("step record requires a 'cmd' field", record.token);
+    }
+
+    void step_check(const Statement& statement)
+    {
+        if (statement.expressions.empty()) {
+            error("step requires a non-empty command", statement.token);
+            return;
+        }
+        if (statement.expressions.size() == 1 &&
+            statement.expressions.front().kind == Expr::Kind::Record) {
+            step_record_check(statement.expressions.front());
+            return;
+        }
+        for (const Expr& argument : statement.expressions) {
+            if (argument.kind == Expr::Kind::Record) {
+                error("a record step must be the only argument to `step`", argument.token);
+                continue;
+            }
+            const StaticType type = expression(argument);
+            if (type != StaticType::String && type != StaticType::ListString &&
+                type != StaticType::ListUnknown && type != StaticType::Unknown)
+                error("step arguments must be strings, got " + std::string(type_name(type)),
+                      argument.token);
+        }
+    }
+
     void statement_check(const Statement& statement)
     {
         switch (statement.kind) {
@@ -1430,15 +1489,7 @@ private:
                 values_[statement.name] = expression(statement.expressions.front());
                 return;
             case Statement::Kind::Step:
-                for (const Expr& argument : statement.expressions) {
-                    const StaticType type = expression(argument);
-                    if (type != StaticType::String && type != StaticType::ListString &&
-                        type != StaticType::Unknown)
-                        error("step arguments must be strings, got " + std::string(type_name(type)),
-                              argument.token);
-                }
-                if (statement.expressions.empty())
-                    error("step requires a non-empty command", statement.token);
+                step_check(statement);
                 return;
             case Statement::Kind::If:
                 require_boolean(expression(statement.expressions.front()), statement.token);
@@ -1648,10 +1699,14 @@ private:
         return false;
     }
 
-    static std::string string(const Value& value, const Token& token, const Evaluator& evaluator)
+    // One word of an argv array. Steps are argv arrays of strings, never a
+    // shell string (design doc §5.4), so nothing is coerced here: an integer
+    // in a step is a plugin bug, not something to stringify silently.
+    const std::string& step_word(const Value& value, const Token& token) const
     {
         if (value.kind != Value::Kind::String)
-            evaluator.fail("step arguments must be strings", token);
+            fail("step arguments must be strings, got " + std::string(kind_name(value.kind)),
+                 token);
         return value.string;
     }
 
@@ -2017,6 +2072,91 @@ private:
             environment_.erase(statement.name);
     }
 
+    // `step` has two forms (design doc §5.4):
+    //
+    //   step mkdir "-p" dir                      variadic argv
+    //   step { cmd: [...], cwd: "x", label: "y" } record, with per-step options
+    //
+    // The record form is the only way to reach a step's cwd, env, and label,
+    // which the executor needs for `kap dev`'s concurrent prefixed output
+    // (§5.11). It was unreachable from KPL before: a record argument fell
+    // through to the argv path and died with "step arguments must be strings".
+    void step_run(const Statement& statement)
+    {
+        if (statement.expressions.size() == 1) {
+            const Expr& only  = statement.expressions.front();
+            const Value value = expression(only);
+            if (value.kind == Value::Kind::Record) {
+                spec_.steps.push_back(step_from_record(value, only.token));
+                return;
+            }
+            spec_.steps.push_back(step_from_words({value}, {only.token}, statement.token));
+            return;
+        }
+
+        std::vector<Value> values;
+        std::vector<Token> tokens;
+        values.reserve(statement.expressions.size());
+        tokens.reserve(statement.expressions.size());
+        for (const Expr& argument : statement.expressions) {
+            values.push_back(expression(argument));
+            tokens.push_back(argument.token);
+        }
+        spec_.steps.push_back(step_from_words(values, tokens, statement.token));
+    }
+
+    // Flatten argv arguments: a string contributes one word, a list splices in
+    // all of its words. That is what makes `step ["cargo", "build"] + extra`
+    // and `step "ninja" dir` produce the same shape of argv.
+    Step step_from_words(const std::vector<Value>& values,
+                         const std::vector<Token>& tokens,
+                         const Token&              statement_token) const
+    {
+        Step step;
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            const Value& value = values[index];
+            if (value.kind == Value::Kind::List) {
+                for (const Value& item : value.list)
+                    step.command.push_back(step_word(item, tokens[index]));
+            } else {
+                step.command.push_back(step_word(value, tokens[index]));
+            }
+        }
+        if (step.command.empty())
+            fail("step requires a non-empty command", statement_token);
+        return step;
+    }
+
+    Step step_from_record(const Value& record, const Token& token) const
+    {
+        Step step;
+        for (const auto& [field, value] : record.record) {
+            if (field == "cmd") {
+                if (value.kind != Value::Kind::List)
+                    fail("step field 'cmd' must be a list of strings", token);
+                for (const Value& item : value.list)
+                    step.command.push_back(step_word(item, token));
+            } else if (field == "cwd") {
+                step.cwd = step_word(value, token);
+            } else if (field == "label") {
+                step.label = step_word(value, token);
+            } else if (field == "env") {
+                if (value.kind != Value::Kind::Record)
+                    fail("step field 'env' must be a record of strings", token);
+                for (const auto& [name, entry] : value.record)
+                    step.environment[name] = step_word(entry, token);
+            } else {
+                // An unknown field is almost always a typo for one of these
+                // four, and silently ignoring it would drop the very option
+                // the author was trying to set.
+                fail("unknown step field '" + field + "'; expected cmd, cwd, env, or label", token);
+            }
+        }
+        if (step.command.empty())
+            fail("step record requires a non-empty 'cmd' list", token);
+        return step;
+    }
+
     void statement_run(const Statement& statement)
     {
         switch (statement.kind) {
@@ -2025,22 +2165,8 @@ private:
                 environment_[statement.name] = expression(statement.expressions.front());
                 return;
             case Statement::Kind::Step:
-                {
-                    Step step;
-                    for (const Expr& argument : statement.expressions) {
-                        const Value value = expression(argument);
-                        if (value.kind == Value::Kind::List) {
-                            for (const Value& item : value.list)
-                                step.command.push_back(string(item, argument.token, *this));
-                        } else {
-                            step.command.push_back(string(value, argument.token, *this));
-                        }
-                    }
-                    if (step.command.empty())
-                        fail("step requires a non-empty command", statement.token);
-                    spec_.steps.push_back(std::move(step));
-                    return;
-                }
+                step_run(statement);
+                return;
             case Statement::Kind::If:
                 for (const Statement& child : boolean(expression(statement.expressions.front()),
                                                       statement.expressions.front().token)
