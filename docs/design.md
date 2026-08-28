@@ -941,8 +941,8 @@ diagnostics with line numbers. ✅
 
 - [ ] Schema validation (config record construction)
 - [ ] Type checker for expressions and `step` statements
-- [ ] Tree-walk interpreter with `project` host object (mocked in tests)
-- [ ] `report_freed_space`, `concurrent` modifiers
+- [x] Tree-walk interpreter with `project` host object (mocked in tests)
+- [x] `report_freed_space`, `concurrent` modifiers
 - [ ] AST binary cache (`.kapc`)
 - [ ] `kap plugin test <name>` — compare steps against `expected/*.json`
 
