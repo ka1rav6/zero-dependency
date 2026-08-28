@@ -19,6 +19,7 @@ docker/              # dev container + entrypoint
 scripts/             # in-docker wrapper, bootstrap, CI
 tests/               # zero-dep unit tests (in-tree harness)
 docs/design.md       # design doc & incremental roadmap
+howto.md             # contributor guide: how the code works, how to add to it
 ```
 
 ## Build & test
@@ -41,3 +42,22 @@ docker compose run --rm dev
 ```
 
 See `docs/dockerusage.md` for a full Docker guide.
+
+## Contributing
+
+`howto.md` is the contributor guide: what every module does, how the test
+harness works, how to add a feature end to end, and the pitfalls worth knowing
+about before your first commit. `AGENTS.md` has the non-negotiable rules.
+
+Run the full pipeline before you commit — if this is green, CI will be:
+
+```sh
+./scripts/ci.sh
+```
+
+### Status
+
+Milestones 0 and 1 are complete: the dev container, CI, and the shared
+infrastructure libraries (diagnostics, argv, sandboxed filesystem, TOML, CLI).
+`kap config get` reads a project's `kap.toml`. The KPL lexer and parser
+(Milestone 2) are next. See `docs/design.md` §11 for the full roadmap.

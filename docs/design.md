@@ -895,16 +895,30 @@ a fresh clone.
 ### Milestone 1 — Minimal infrastructure libraries
 **Goal:** Shared zero-dep utilities used by everything else.
 
-- [ ] `core/diag.hpp` — error types, source locations, rich messages
-- [ ] `core/argv.hpp` — argv vector, escaping for display
-- [ ] `core/fs.hpp` — thin `std::filesystem` wrappers (exists, read capped, glob)
-- [ ] `core/toml.hpp` — minimal TOML subset parser (tables, strings, ints,
+- [x] `core/diag.hpp` — error types, source locations, rich messages
+- [x] `core/argv.hpp` — argv vector, escaping for display
+- [x] `core/fs.hpp` — thin `std::filesystem` wrappers (exists, read capped, glob)
+- [x] `core/toml.hpp` — minimal TOML subset parser (tables, strings, ints,
       bools, arrays; enough for config + lockfile + registry index)
-- [ ] `core/cli.hpp` — subcommand parser with `--` passthrough
-- [ ] Unit tests for TOML parser and CLI parser
+- [x] `core/cli.hpp` — subcommand parser with `--` passthrough
+- [x] Unit tests for TOML parser and CLI parser
 
 **Exit criteria:** `kap config get` reads a fixture TOML file; 100% of
-parser tests pass.
+parser tests pass. ✅ — 131 unit tests + 41 end-to-end assertions, all green
+under `./scripts/ci.sh`.
+
+**Notes for later milestones.** The TOML subset deliberately stops short of
+full TOML 1.0. Not implemented, because nothing in the design needs it yet:
+floats, datetimes, quoted/dotted *keys* (`"a.b" = 1`), inline tables
+(`{ a = 1 }`), arrays of tables (`[[x]]`), literal `'single-quoted'` strings,
+multi-line `"""` strings, `\uXXXX` escapes, and hex/octal/binary integers. Each
+is rejected with a located diagnostic rather than misparsed, so adding one
+later is additive and cannot silently change the meaning of an existing file.
+
+`core/argv.hpp`'s `escape_word` renders for *display only* (`--dry-run`, error
+messages). It is never used to build a command line for execution — the
+executor in Milestone 5 passes argv arrays to `posix_spawn` directly, so no
+quoting round-trip is involved and no shell is ever invoked.
 
 ---
 
