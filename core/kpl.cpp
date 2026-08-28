@@ -705,6 +705,303 @@ Plugin parse(std::string_view source, std::string source_name)
     return Parser{std::move(tokens), std::move(source_name)}.run();
 }
 
+Value Value::none()
+{
+    return Value{};
+}
+
+Value Value::string_value(std::string value)
+{
+    Value result;
+    result.kind   = Kind::String;
+    result.string = std::move(value);
+    return result;
+}
+
+Value Value::integer_value(std::int64_t value)
+{
+    Value result;
+    result.kind    = Kind::Integer;
+    result.integer = value;
+    return result;
+}
+
+Value Value::boolean_value(bool value)
+{
+    Value result;
+    result.kind    = Kind::Boolean;
+    result.boolean = value;
+    return result;
+}
+
+Value Value::list_value(std::vector<Value> value)
+{
+    Value result;
+    result.kind = Kind::List;
+    result.list = std::move(value);
+    return result;
+}
+
+Value Value::record_value(std::map<std::string, Value> value)
+{
+    Value result;
+    result.kind   = Kind::Record;
+    result.record = std::move(value);
+    return result;
+}
+
+namespace
+{
+
+class Evaluator
+{
+public:
+    Evaluator(const Project&                      project,
+              const std::map<std::string, Value>& config,
+              const std::vector<std::string>&     extra)
+    {
+        environment_["config"]  = Value::record_value(config);
+        environment_["extra"]   = strings_to_value(extra);
+        environment_["project"] = Value::record_value({
+            {"root", Value::string_value(project.root)},
+            {"matched_files", strings_to_value(project.matched_files)},
+        });
+        project_                = &project;
+    }
+
+    CommandSpec run(const Command& command)
+    {
+        for (const Statement& statement : command.body.statements)
+            statement_run(statement);
+        return spec_;
+    }
+
+private:
+    static Value strings_to_value(const std::vector<std::string>& values)
+    {
+        std::vector<Value> result;
+        result.reserve(values.size());
+        for (const std::string& value : values)
+            result.push_back(Value::string_value(value));
+        return Value::list_value(std::move(result));
+    }
+
+    [[noreturn]] void fail(const std::string& message, const Token& token) const
+    {
+        throw diag::Error{
+            diag::error(message, diag::Location{source_name_, token.line, token.column})};
+    }
+
+    static bool truthy(const Value& value)
+    {
+        return value.kind == Value::Kind::Boolean && value.boolean;
+    }
+
+    static std::string string(const Value& value, const Token& token, const Evaluator& evaluator)
+    {
+        if (value.kind != Value::Kind::String)
+            evaluator.fail("step arguments must be strings", token);
+        return value.string;
+    }
+
+    Value expression(const Expr& expr)
+    {
+        switch (expr.kind) {
+            case Expr::Kind::String:
+                return Value::string_value(expr.token.text);
+            case Expr::Kind::Integer:
+                return Value::integer_value(expr.token.integer);
+            case Expr::Kind::Boolean:
+                return Value::boolean_value(expr.token.text == "true");
+            case Expr::Kind::None:
+                return Value::none();
+            case Expr::Kind::Name:
+                {
+                    const auto found = environment_.find(expr.token.text);
+                    if (found == environment_.end())
+                        fail("unknown name '" + expr.token.text + "'", expr.token);
+                    return found->second;
+                }
+            case Expr::Kind::List:
+                {
+                    std::vector<Value> values;
+                    for (const Expr& child : expr.children)
+                        values.push_back(expression(child));
+                    return Value::list_value(std::move(values));
+                }
+            case Expr::Kind::Record:
+                {
+                    std::map<std::string, Value> values;
+                    for (std::size_t i = 0; i < expr.names.size(); ++i)
+                        values.emplace(expr.names[i], expression(expr.children[i]));
+                    return Value::record_value(std::move(values));
+                }
+            case Expr::Kind::Member:
+                {
+                    const Value object = expression(expr.children.front());
+                    if (object.kind != Value::Kind::Record)
+                        fail("member access requires a record", expr.token);
+                    const auto found = object.record.find(expr.token.text);
+                    if (found == object.record.end())
+                        fail("unknown member '" + expr.token.text + "'", expr.token);
+                    return found->second;
+                }
+            case Expr::Kind::Index:
+                {
+                    const Value object = expression(expr.children[0]);
+                    const Value index  = expression(expr.children[1]);
+                    if (object.kind != Value::Kind::List || index.kind != Value::Kind::Integer ||
+                        index.integer < 0 ||
+                        static_cast<std::size_t>(index.integer) >= object.list.size())
+                        fail("list index is out of range", expr.token);
+                    return object.list[static_cast<std::size_t>(index.integer)];
+                }
+            case Expr::Kind::Unary:
+                {
+                    const Value value = expression(expr.children.front());
+                    if (expr.token.kind == TokenKind::Bang)
+                        return Value::boolean_value(!truthy(value));
+                    if (value.kind != Value::Kind::Integer)
+                        fail("unary '-' requires an integer", expr.token);
+                    return Value::integer_value(-value.integer);
+                }
+            case Expr::Kind::Binary:
+                return binary(expr);
+            case Expr::Kind::Conditional:
+                return truthy(expression(expr.children[0])) ? expression(expr.children[1])
+                                                            : expression(expr.children[2]);
+            case Expr::Kind::Call:
+                return call(expr);
+        }
+        fail("unsupported expression", expr.token);
+    }
+
+    Value binary(const Expr& expr)
+    {
+        const Value left = expression(expr.children[0]);
+        if (expr.token.kind == TokenKind::AndAnd && !truthy(left))
+            return Value::boolean_value(false);
+        if (expr.token.kind == TokenKind::OrOr && truthy(left))
+            return Value::boolean_value(true);
+        const Value right = expression(expr.children[1]);
+        if (expr.token.kind == TokenKind::Plus) {
+            if (left.kind == Value::Kind::String && right.kind == Value::Kind::String)
+                return Value::string_value(left.string + right.string);
+            if (left.kind == Value::Kind::List && right.kind == Value::Kind::List) {
+                std::vector<Value> values = left.list;
+                values.insert(values.end(), right.list.begin(), right.list.end());
+                return Value::list_value(std::move(values));
+            }
+        }
+        if (left.kind == Value::Kind::Integer && right.kind == Value::Kind::Integer) {
+            switch (expr.token.kind) {
+                case TokenKind::Plus:
+                    return Value::integer_value(left.integer + right.integer);
+                case TokenKind::Minus:
+                    return Value::integer_value(left.integer - right.integer);
+                case TokenKind::Star:
+                    return Value::integer_value(left.integer * right.integer);
+                case TokenKind::Slash:
+                    if (right.integer == 0)
+                        fail("division by zero", expr.token);
+                    return Value::integer_value(left.integer / right.integer);
+                case TokenKind::Less:
+                    return Value::boolean_value(left.integer < right.integer);
+                case TokenKind::LessEqual:
+                    return Value::boolean_value(left.integer <= right.integer);
+                case TokenKind::Greater:
+                    return Value::boolean_value(left.integer > right.integer);
+                case TokenKind::GreaterEqual:
+                    return Value::boolean_value(left.integer >= right.integer);
+                default:
+                    break;
+            }
+        }
+        if (expr.token.kind == TokenKind::EqualEqual || expr.token.kind == TokenKind::BangEqual) {
+            const bool equal = left.kind == right.kind && left.string == right.string &&
+                               left.integer == right.integer && left.boolean == right.boolean;
+            return Value::boolean_value(expr.token.kind == TokenKind::EqualEqual ? equal : !equal);
+        }
+        fail("incompatible operands", expr.token);
+    }
+
+    Value call(const Expr& expr)
+    {
+        const Expr& member = expr.children.front();
+        if (member.kind != Expr::Kind::Member || member.children.front().token.text != "project")
+            fail("only project host calls are allowed", expr.token);
+        if (expr.children.size() != 2 || expr.children[1].kind != Expr::Kind::String)
+            fail("project host calls require one string argument", expr.token);
+        const std::string argument = expr.children[1].token.text;
+        if (member.token.text == "tool")
+            return Value::boolean_value(project_->tool && project_->tool(argument));
+        if (member.token.text == "exists")
+            return Value::boolean_value(project_->exists && project_->exists(argument));
+        fail("unknown project method '" + member.token.text + "'", member.token);
+    }
+
+    void statement_run(const Statement& statement)
+    {
+        switch (statement.kind) {
+            case Statement::Kind::Let:
+            case Statement::Kind::Assignment:
+                environment_[statement.name] = expression(statement.expressions.front());
+                return;
+            case Statement::Kind::Step:
+                {
+                    Step step;
+                    for (const Expr& argument : statement.expressions) {
+                        const Value value = expression(argument);
+                        if (value.kind == Value::Kind::List) {
+                            for (const Value& item : value.list)
+                                step.command.push_back(string(item, argument.token, *this));
+                        } else {
+                            step.command.push_back(string(value, argument.token, *this));
+                        }
+                    }
+                    if (step.command.empty())
+                        fail("step requires a non-empty command", statement.token);
+                    spec_.steps.push_back(std::move(step));
+                    return;
+                }
+            case Statement::Kind::If:
+                for (const Statement& child : truthy(expression(statement.expressions.front()))
+                                                  ? statement.body
+                                                  : statement.otherwise)
+                    statement_run(child);
+                return;
+            case Statement::Kind::Concurrent:
+                spec_.concurrent = truthy(expression(statement.expressions.front()));
+                return;
+            case Statement::Kind::ReportFreedSpace:
+                spec_.report_freed_space = true;
+                return;
+            default:
+                fail("statement is not supported by the evaluator yet", statement.token);
+        }
+    }
+
+    const Project*               project_ = nullptr;
+    std::string                  source_name_;
+    std::map<std::string, Value> environment_;
+    CommandSpec                  spec_;
+};
+
+} // namespace
+
+CommandSpec evaluate(const Plugin&                       plugin,
+                     std::string_view                    command_name,
+                     const Project&                      project,
+                     const std::map<std::string, Value>& config,
+                     const std::vector<std::string>&     extra)
+{
+    for (const Command& command : plugin.commands) {
+        if (command.name == command_name)
+            return Evaluator{project, config, extra}.run(command);
+    }
+    throw diag::Error{diag::error("unknown command '" + std::string(command_name) + "'")};
+}
+
 std::vector<std::string> validate(const Plugin& plugin, int supported_api_version)
 {
     std::vector<std::string> errors;
