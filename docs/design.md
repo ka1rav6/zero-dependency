@@ -881,11 +881,11 @@ until the previous phase's exit criteria pass in Docker CI.
 ### Milestone 0 — Repo + Docker dev shell
 **Goal:** Anyone can clone and get a shell with pinned toolchain.
 
-- [ ] Repository skeleton (`core/`, `plugins/`, `registry/`, `docker/`)
-- [ ] `docker/dev.Dockerfile`, `docker-compose.yml`, `scripts/in-docker.sh`
-- [ ] Empty `kap` binary that prints version and exits 0
-- [ ] In-tree test harness compiles and runs one smoke test
-- [ ] CI: build container, compile, run smoke test
+- [x] Repository skeleton (`core/`, `plugins/`, `registry/`, `docker/`)
+- [x] `docker/dev.Dockerfile`, `docker-compose.yml`, `scripts/in-docker.sh`
+- [x] Empty `kap` binary that prints version and exits 0
+- [x] In-tree test harness compiles and runs one smoke test
+- [x] CI: build container, compile, run smoke test
 
 **Exit criteria:** `docker compose run --rm dev ./scripts/ci.sh` green on
 a fresh clone.
