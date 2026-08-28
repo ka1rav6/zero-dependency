@@ -1,0 +1,20 @@
+# .dockerignore
+#
+# Keeps image build contexts small and — more importantly — stops local build
+# artifacts and git history from leaking into an image.
+
+# Never ship the git metadata into a build context.
+.git
+.github
+
+# Never copy local build artifacts into an image build.
+build/
+build-*/
+CMakeCache.txt
+compile_commands.json
+
+# Editor / OS droppings.
+.vscode/
+.idea/
+*.swp
+*.tmp

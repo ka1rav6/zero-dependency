@@ -1,0 +1,38 @@
+# docker-compose.yml
+#
+# `docker compose run --rm dev` is the default onboarding path (design doc
+# §10). The dev service bind-mounts the live repo read/write so edits never
+# need an image rebuild, and uses named volumes to keep CMake artifacts and
+# kap's caches out of the source tree (so `git status` stays clean).
+#
+# Usage:
+#   docker compose run --rm dev            # interactive shell
+#   docker compose run --rm dev ./scripts/ci.sh   # one-shot CI
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    # A tiny PID-1 shim reaps orphaned child processes inside the container,
+    # so a stray background test can never linger and confuse later runs.
+    init: true
+    volumes:
+      # Live repo: host edits appear in the container instantly.
+      - .:/kap
+      # Persistent scratch volumes keep the bind mount free of build junk.
+      - kap-build:/kap/build
+      - kap-cache:/root/.cache/kap
+      - kap-config:/root/.config/kap
+    working_dir: /kap
+    environment:
+      - KAP_DEV=1
+    # Interactive defaults: keep stdin open with a TTY so you drop straight
+    # into a working shell with history and colours.
+    stdin_open: true
+    tty: true
+
+volumes:
+  kap-build:
+  kap-cache:
+  kap-config:
