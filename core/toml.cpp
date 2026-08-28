@@ -204,15 +204,28 @@ private:
     {
         skip_inline_ws();
         skip_inline_comment();
-        if (!at_end() && peek() != '\n') {
-            fail("expected end of line");
+        if (at_end() || peek() == '\n') {
+            return;
         }
+        // A '.' or an exponent right after an integer is a float, which this
+        // subset does not implement. Saying so beats "expected end of line",
+        // which reads as a syntax error in code that is valid TOML.
+        if (peek() == '.' || peek() == 'e' || peek() == 'E' || peek() == '-' || peek() == ':') {
+            fail("floating-point numbers and datetimes are not supported");
+        }
+        fail("expected end of line");
     }
 
     // Read a bare key: [A-Za-z0-9_-]+ (underscore/dash keep TOML keys like
     // "build_dir" and "cmake-cpp" parseable).
     std::string read_bare_key()
     {
+        // `[[name]]` is an array of tables. The second '[' would otherwise be
+        // reported as "expected a key name", which describes the symptom
+        // rather than the cause.
+        if (peek() == '[') {
+            fail("arrays of tables ([[name]]) are not supported");
+        }
         const std::size_t start = pos_;
         while (is_bare_key_char(peek())) {
             advance();
@@ -375,6 +388,19 @@ private:
         }
         if (c == '-' || c == '+' || is_digit(c)) {
             return parse_integer();
+        }
+        // Name the TOML features this subset deliberately omits (see the
+        // header, and the Milestone 1 notes in the design doc). "expected a
+        // value" is technically accurate for all of them and helps with none:
+        // someone who wrote a perfectly ordinary inline table deserves to be
+        // told that *this parser* does not do inline tables, not to go hunting
+        // for a typo that is not there.
+        if (c == '\'') {
+            fail("literal 'single-quoted' strings are not supported; use a "
+                 "\"double-quoted\" string");
+        }
+        if (c == '{') {
+            fail("inline tables are not supported; use a [table] header instead");
         }
         fail("expected a value");
     }

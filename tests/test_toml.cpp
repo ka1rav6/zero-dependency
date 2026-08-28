@@ -258,3 +258,30 @@ KAP_TEST("Value factories set the kind and payload together")
     KAP_ASSERT(kap::toml::is_array(kap::toml::make_array()));
     KAP_ASSERT(kap::toml::is_table(kap::toml::make_table()));
 });
+
+KAP_TEST("TOML names the features it deliberately does not implement")
+{
+    // Design doc Milestone 1 says each omitted TOML feature is "rejected with
+    // a located diagnostic rather than misparsed". Rejecting is necessary but
+    // not sufficient: someone who wrote perfectly ordinary TOML deserves to be
+    // told that *this parser* does not do inline tables, not to go hunting for
+    // a typo that is not there.
+    const auto message = [](const char* text) {
+        try {
+            kap::toml::parse(text, "kap.toml");
+        }
+        catch (const kap::diag::Error& error) {
+            return error.diagnostic().message;
+        }
+        return std::string("<no error>");
+    };
+
+    KAP_ASSERT(message("a = 1.5\n").find("floating-point") != std::string::npos);
+    KAP_ASSERT(message("a = 1979-05-27\n").find("datetime") != std::string::npos);
+    KAP_ASSERT(message("a = { b = 1 }\n").find("inline table") != std::string::npos);
+    KAP_ASSERT(message("[[a]]\n").find("arrays of tables") != std::string::npos);
+    KAP_ASSERT(message("a = 'x'\n").find("single-quoted") != std::string::npos);
+
+    // And a genuine syntax error still reads as one.
+    KAP_ASSERT(message("a = 1 2\n").find("expected end of line") != std::string::npos);
+});
