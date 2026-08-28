@@ -401,7 +401,7 @@ private:
             result.kind  = Statement::Kind::Step;
             result.token = tokens_[position_ - 1];
             result.expressions.push_back(expression());
-            while (check(TokenKind::String))
+            while (starts_step_argument() && !is_statement_start())
                 result.expressions.push_back(expression());
             return result;
         }
@@ -504,6 +504,30 @@ private:
     Expr expression()
     {
         return conditional();
+    }
+
+    bool starts_step_argument() const
+    {
+        switch (peek().kind) {
+            case TokenKind::String:
+            case TokenKind::Integer:
+            case TokenKind::Identifier:
+            case TokenKind::LeftBracket:
+            case TokenKind::LeftBrace:
+            case TokenKind::LeftParen:
+            case TokenKind::Bang:
+            case TokenKind::Minus:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool is_statement_start() const
+    {
+        return check_text("let") || check_text("step") || check_text("if") || check_text("for") ||
+               check_text("match") || check_text("concurrent") ||
+               check_text("report_freed_space") || check(TokenKind::RightBrace);
     }
 
     Expr conditional()
