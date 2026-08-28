@@ -1,0 +1,14 @@
+manifest {
+  name = "cargo-rust"
+  version = "1.0.0"
+  api_version = 1
+  priority = 30
+}
+
+detect {
+  file_exists "Cargo.toml"
+}
+
+command build(project, config, extra) {
+  step ["cargo", "build"] + extra
+}

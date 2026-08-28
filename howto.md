@@ -92,15 +92,15 @@ tests/
   e2e.sh         end-to-end tests that drive the built binary
   fixtures/      sample input files
 
-plugins/         first-party KPL plugins        (Milestone 8)
+plugins/         first-party KPL plugins        (Milestone 2)
 registry/        the plugin index               (Milestone 7)
 docker/          dev container
 scripts/         ci.sh, bootstrap.sh, in-docker.sh
 docs/            design.md, dockerusage.md
 ```
 
-Everything under `plugins/` and `registry/` is still empty — those milestones
-have not started.
+`plugins/` contains the bundled `cmake-cpp` and `cargo-rust` examples used by
+`kap plugin doctor`; `registry/` remains reserved for Milestone 7.
 
 ---
 

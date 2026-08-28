@@ -18,6 +18,7 @@
 #include "core/cli.hpp"
 #include "core/diag.hpp"
 #include "core/fs.hpp"
+#include "core/kpl.hpp"
 #include "core/toml.hpp"
 #include "core/version.hpp"
 
@@ -33,6 +34,7 @@ void print_usage(std::ostream& out)
            "\n"
            "commands:\n"
            "  config get <key>   read one key from ./kap.toml (or --root)\n"
+           "  plugin doctor      validate bundled plugin files\n"
            "\n"
            "global flags:\n"
            "  -n, --dry-run      print actions without running them\n"
@@ -42,6 +44,48 @@ void print_usage(std::ostream& out)
            "\n"
            "kap is under construction (Milestone 1). See docs/design.md for\n"
            "the roadmap.\n";
+}
+
+std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
+
+int run_plugin_doctor(const kap::cli::GlobalOptions& global,
+                      const std::vector<std::string>& args)
+{
+    if (!args.empty()) {
+        std::cerr << "kap: usage: kap plugin doctor\n";
+        return 2;
+    }
+    const std::filesystem::path plugin_root = search_root(global) / "plugins";
+    const std::vector<std::string> plugin_dirs = kap::fs::glob(plugin_root, "*");
+    int failures = 0;
+    int checked = 0;
+    for (const std::string& plugin_dir : plugin_dirs) {
+        const std::filesystem::path source = plugin_root / plugin_dir / "plugin.kpl";
+        if (!kap::fs::is_file(source))
+            continue;
+        ++checked;
+        try {
+            const kap::kpl::Plugin plugin = kap::kpl::parse(kap::fs::read_text(source), source.string());
+            const std::vector<std::string> errors = kap::kpl::validate(plugin);
+            if (errors.empty()) {
+                std::cout << "[PASS] " << plugin_dir << "\n";
+                continue;
+            }
+            ++failures;
+            std::cerr << "kap: error: " << source.string() << ":\n";
+            for (const std::string& error : errors)
+                std::cerr << "  " << error << "\n";
+        }
+        catch (const kap::diag::Error& error) {
+            ++failures;
+            std::cerr << error.report();
+        }
+    }
+    if (checked == 0) {
+        std::cerr << "kap: error: no plugin.kpl files found in " << plugin_root.string() << "\n";
+        return 1;
+    }
+    return failures == 0 ? 0 : 1;
 }
 
 // The search root: --root wins, otherwise the current directory (design doc
@@ -191,6 +235,10 @@ int main(int argc, char** argv)
 
         if (inv.command == "config") {
             return run_config(inv.global, inv.argv);
+        }
+        if (inv.command == "plugin" && inv.argv.size() >= 1 && inv.argv[0] == "doctor") {
+            return run_plugin_doctor(inv.global,
+                                     std::vector<std::string>(inv.argv.begin() + 1, inv.argv.end()));
         }
 
         std::cerr << "kap: unknown command '" << inv.command << "'\n";

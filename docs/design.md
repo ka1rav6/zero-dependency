@@ -928,11 +928,11 @@ quoting round-trip is involved and no shell is ever invoked.
 - [x] Tokenizer with comment support
 - [x] Recursive-descent parser per §5.5 grammar
 - [x] AST nodes for all top-level blocks and statements
-- [ ] `kap plugin doctor` reports parse errors with line/column
-- [ ] Golden tests: parse all example plugins in `plugins/`
+- [x] `kap plugin doctor` reports parse errors with line/column
+- [x] Golden tests: parse all example plugins in `plugins/`
 
 **Exit criteria:** Every `.kpl` fixture parses; malformed inputs produce
-diagnostics with line numbers.
+diagnostics with line numbers. ✅
 
 ---
 

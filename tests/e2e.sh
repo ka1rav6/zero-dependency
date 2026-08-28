@@ -162,6 +162,17 @@ expect_status "--root with no value exits 1" 1 config get x --root
 
 bad_dir="$(mktemp -d)"
 trap 'rm -rf "$bad_dir"' EXIT
+
+# --- plugin doctor ---------------------------------------------------------------
+
+expect_status "plugin doctor validates bundled plugins" 0 plugin doctor --root "$repo_root"
+
+mkdir -p "$bad_dir/plugins/broken"
+printf 'manifest { name = "broken"\n' > "$bad_dir/plugins/broken/plugin.kpl"
+expect_status "plugin doctor rejects a malformed plugin" 1 plugin doctor --root "$bad_dir"
+expect_stderr_contains "plugin doctor preserves parser locations" "plugin.kpl:2:" \
+    plugin doctor --root "$bad_dir"
+
 printf 'a = @\n' > "$bad_dir/kap.toml"
 
 expect_status "a malformed config file exits 1" 1 config get --root "$bad_dir" a

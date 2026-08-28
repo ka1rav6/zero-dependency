@@ -681,4 +681,42 @@ Plugin parse(std::string_view source, std::string source_name)
     return Parser{std::move(tokens), std::move(source_name)}.run();
 }
 
+std::vector<std::string> validate(const Plugin& plugin, int supported_api_version)
+{
+    std::vector<std::string> errors;
+    if (!plugin.manifest) {
+        errors.push_back("missing manifest block");
+        return errors;
+    }
+
+    bool has_name = false;
+    bool has_version = false;
+    bool has_api_version = false;
+    for (const Statement& statement : plugin.manifest->statements) {
+        if (statement.kind != Statement::Kind::Assignment || statement.expressions.empty()) {
+            continue;
+        }
+        const Expr& value = statement.expressions.front();
+        if (statement.name == "name") {
+            has_name = value.kind == Expr::Kind::String && !value.token.text.empty();
+        } else if (statement.name == "version") {
+            has_version = value.kind == Expr::Kind::String && !value.token.text.empty();
+        } else if (statement.name == "api_version") {
+            has_api_version = value.kind == Expr::Kind::Integer;
+            if (has_api_version && value.token.integer > supported_api_version) {
+                errors.push_back("api_version " + std::to_string(value.token.integer) +
+                                 " is newer than supported version " +
+                                 std::to_string(supported_api_version));
+            }
+        }
+    }
+    if (!has_name)
+        errors.push_back("manifest requires a non-empty string 'name'");
+    if (!has_version)
+        errors.push_back("manifest requires a non-empty string 'version'");
+    if (!has_api_version)
+        errors.push_back("manifest requires an integer 'api_version'");
+    return errors;
+}
+
 } // namespace kap::kpl

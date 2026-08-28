@@ -90,3 +90,21 @@ KAP_TEST("KPL parser rejects malformed declarations with a location")
 {
     KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::parse("command build( { }\n", "plugin.kpl"));
 });
+
+KAP_TEST("KPL manifest validation accepts the supported contract")
+{
+    const auto plugin = kap::kpl::parse(
+        "manifest { name = \"demo\" version = \"1.0.0\" api_version = 1 }\n");
+    KAP_ASSERT(kap::kpl::validate(plugin).empty());
+});
+
+KAP_TEST("KPL manifest validation reports missing and newer fields")
+{
+    const auto plugin = kap::kpl::parse(
+        "manifest { name = 1 api_version = 2 }\n");
+    const auto errors = kap::kpl::validate(plugin);
+    KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT(errors[0].find("newer") != std::string::npos);
+    KAP_ASSERT(errors[1].find("name") != std::string::npos);
+    KAP_ASSERT(errors[2].find("version") != std::string::npos);
+});

@@ -1,0 +1,14 @@
+manifest {
+  name = "cmake-cpp"
+  version = "1.0.0"
+  api_version = 1
+  priority = 30
+}
+
+detect {
+  file_exists "CMakeLists.txt"
+}
+
+command build(project, config, extra) {
+  step ["cmake", "--build", "build"] + extra
+}

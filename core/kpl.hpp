@@ -127,6 +127,11 @@ struct Plugin
     std::vector<Command> commands;
 };
 
+// Validate the manifest contract used by the plugin loader. The parser keeps
+// blocks generic so later KPL features can evolve independently; this check
+// is the narrow compatibility gate needed by `kap plugin doctor`.
+std::vector<std::string> validate(const Plugin& plugin, int supported_api_version = 1);
+
 // Parse one plugin into an AST. Keywords are represented by identifier tokens
 // and validated here, keeping lexical evolution separate from the grammar.
 Plugin parse(std::string_view source, std::string source_name = {});
