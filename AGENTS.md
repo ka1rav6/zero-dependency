@@ -30,12 +30,9 @@ These rules apply without fail, in every change, no exceptions:
 ## 3. Design doc & roadmap
 
 - Always follow the **design doc** and the roadmap contained in it
-  (expected at `docs/design.md` — see note below).
+  (`docs/design.md`).
 - **Ask before making a new design choice** that is not already covered by the
   design doc. Do not silently deviate.
-
-> Note: The design doc and roadmap are not yet written. Treat the path above as a
-> convention until the design doc exists, and update this file once it does.
 
 ---
 
