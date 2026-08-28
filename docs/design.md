@@ -232,6 +232,40 @@ cmake-cpp/
 └── README.md
 ```
 
+**Case format.** One file under `expected/` is one test case. `kap plugin test`
+evaluates a command block against a fixture directory and compares the
+resulting `CommandSpec` (§5.4) with the file. Nothing is executed.
+
+The file name binds the two halves by convention —
+`<fixture>.<command>.steps.json` — and the JSON may override either half
+explicitly, which is what lets one command have several cases:
+
+```json
+{
+  "fixture": "simple-project",     // optional; else from the file name, else
+                                   // the plugin's single fixture directory
+  "command": "build",              // optional; else the last dotted component
+  "config":  { "build_dir": "out" },  // optional overrides on schema defaults
+  "extra":   ["--release"],           // optional passthrough arguments
+  "tools":   ["cmake", "ninja"],      // what project.tool() reports present
+  "env":     { "CI": "true" },        // what project.env() returns
+
+  "steps": [ { "cmd": ["cmake", "--build", "out"] } ],
+  "concurrent": false,
+  "report_freed_space": false
+}
+```
+
+`tools` and `env` are **declared, not sampled from the host**. §5.1 promises
+the same inputs always yield the same `CommandSpec`; a case that consulted the
+real `PATH` would pass or fail depending on the machine. Everything else —
+`exists`, `read`, `glob` — comes from the fixture directory through the normal
+§7 sandbox, which is what a fixture is for.
+
+Fields omitted from a step (`cwd`, `env`, `label`) and from the spec
+(`concurrent`, `report_freed_space`) take their defaults, so a golden file only
+spells out what it cares about.
+
 ### 5.3 Complete `plugin.kpl` example — `cmake-cpp`
 
 ```kpl
@@ -267,7 +301,7 @@ command build(project, config, extra) {
   let cmake = ["cmake", "-S", ".", "-B", dir]
 
   let gen = match config.generator {
-    auto            => project.tool("ninja") ? "Ninja" : none,
+    auto            => if project.tool("ninja") then "Ninja" else none,
     ninja           => "Ninja",
     make            => "Unix Makefiles",
     unix_makefiles  => "Unix Makefiles",
@@ -318,6 +352,20 @@ step ["cargo", "build"] + extra            // list<string> expression
 step { cmd: ["npm", "run", "dev"], cwd: "packages/app", label: "app" }  // record form
 ```
 
+**Bare words.** In the first form, `mkdir` is a program name and `dir` in
+`step mkdir "-p" dir` is a variable — both are bare identifiers. The rule that
+makes both work: an identifier standing alone as a `step` argument resolves to
+a variable if one is bound, and is otherwise the literal word. This applies
+*only* in that position; `step [name]` and `step name + ".txt"` still require a
+real binding, so the cost (a mistyped variable silently becoming a word) is
+confined to the one place the syntax needs it.
+
+In the variadic form a string contributes one word and a list splices in all of
+its words, so `step "ninja" dir` and `step ["ninja", dir]` are the same argv.
+The record form is the only way to set a step's `cwd`, `env`, or `label`;
+mixing it with other arguments is an error, and an unrecognised field is
+rejected rather than ignored.
+
 Modifiers (block-level):
 
 ```kpl
@@ -339,23 +387,42 @@ top_level_decl
             | schema_block | command_decl ;
 
 manifest_block = "manifest" block ;
-detect_block   = "detect" block ;
-requires_block = "requires" block ;
+detect_block   = "detect" directive_block ;
+requires_block = "requires" directive_block ;
 schema_block   = "schema" block ;
+
+(* `detect` and `requires` hold declarations, not statements. A directive
+   argument is deliberately never a bare identifier, so an identifier at
+   argument position unambiguously starts the next directive — no lookahead,
+   no newline sensitivity. Bare identifiers *inside* a list are read as
+   strings, which is why `any_of [cmake]` needs no quotes. *)
+directive_block = "{" { directive } "}" ;
+directive       = IDENT { directive_arg } ;
+directive_arg   = STRING | INT | directive_list | directive_record ;
+directive_list  = "[" [ directive_elem { "," directive_elem } ] "]" ;
+directive_record= "{" field_lit { "," field_lit } "}" ;
+field_lit       = IDENT ":" directive_elem ;
+directive_elem  = STRING | INT | BOOL | IDENT ;
 
 command_decl   = "command" IDENT "(" param_list ")" block ;
 
 block       = "{" { stmt } "}" ;
 
-stmt        = let_stmt | step_stmt | if_stmt | for_stmt | match_stmt
-            | concurrent_stmt | report_stmt ;
+stmt        = let_stmt | assign_stmt | step_stmt | if_stmt | for_stmt
+            | match_stmt | concurrent_stmt | report_stmt ;
 
 let_stmt    = "let" IDENT "=" expr ;
 step_stmt   = "step" step_arg { step_arg } | "step" expr ;
 if_stmt     = "if" expr block { "else" "if" expr block } [ "else" block ] ;
 for_stmt    = "for" IDENT "in" expr block ;
-match_stmt  = "match" expr "{" { match_arm } "}" ;
-match_arm   = pattern "=>" expr "," ;
+(* `match` is an EXPRESSION (§5.9 assigns one to a `let`); match_stmt is just
+   one in statement position, whose value is discarded. There is no catch-all
+   pattern in v1 — an uncovered value is a located run-time error, which is the
+   honest outcome when an enum member is added and an arm is forgotten. *)
+match_expr  = "match" expr "{" match_arm { match_arm } "}" ;
+match_stmt  = match_expr ;
+match_arm   = pattern "=>" expr [ "," ] ;
+assign_stmt = IDENT "=" expr ;
 
 concurrent_stmt = "concurrent" BOOL ;
 report_stmt     = "report_freed_space" ;
@@ -376,8 +443,11 @@ mul_expr    = unary_expr { ( "*" | "/" ) unary_expr } ;
 unary_expr  = ( "!" | "-" ) unary_expr | postfix_expr ;
 postfix_expr= primary_expr { "." IDENT | "(" arg_list ")" | "[" expr "]" } ;
 primary_expr= literal | IDENT | "(" expr ")" | list_expr | record_expr
-            | "if" expr expr "else" expr ;
+            | match_expr
+            | "if" expr "then" expr "else" expr ;
 
+(* A bare IDENT pattern is an enum MEMBER compared as its own text, not a
+   variable read: `ninja => "Ninja"` never binds anything. *)
 pattern     = literal | IDENT | "none" ;
 
 literal     = STRING | INT | BOOL | "none" ;
@@ -431,6 +501,15 @@ Supported field types: `str`, `int`, `bool`, `list<str>`, `list<int>`,
 `enum { ... }`. The core validates `~/.config/kap/config.toml` and
 `./kap.toml` against this schema *before* invoking KPL, so typos fail
 fast with a clear error.
+
+The type checker reads the same block, so inside a command block
+`config.<field>` has the field's declared type rather than being opaque. Three
+consequences: a `config` key that is not in the schema is a load-time error
+naming the key; element types survive concatenation, so
+`["cmake"] + config.cmake_args` type-checks as `list<str>`; and a `match` over
+an `enum`-typed field is checked for exhaustiveness (§5.9). A plugin with no
+`schema` block declares no config surface, so its `config` reads are unchecked
+rather than reported as unknown keys.
 
 ### 5.8 Built-in operators and stdlib functions
 
@@ -614,8 +693,8 @@ Detection rules are extracted from the AST at load time into a C++
 | `kap plugin remove <name>` | Uninstall |
 | `kap plugin enable/disable <name>` | Toggle without uninstalling |
 | `kap plugin pin <name> <version>` | Lock a version |
-| `kap plugin test <name>` | Run fixture tests (assert on returned steps) |
-| `kap plugin doctor` | Validate every installed plugin against `api_version` |
+| `kap plugin test <name>` | Run fixture tests (assert on returned steps) — implemented, §5.2 |
+| `kap plugin doctor` | Parse, manifest-validate, and type-check every installed plugin — implemented |
 
 ### 6.2 Install sources
 
@@ -732,12 +811,14 @@ No package managers (vcpkg, Conan) in the build graph.
 | Language | C++20 | `std::filesystem`, `std::span`, `std::optional`, concepts |
 | CLI parsing | In-tree minimal parser | Single header + `.cpp`, no CLI11 |
 | Config format | Minimal TOML subset parser (in-tree) | Enough for `kap.toml`, lockfiles, registry index |
+| JSON | Minimal in-tree subset (`core/json.hpp`) | CommandSpec golden files (§5.2), `.kap/cache.json` (§3.2). No floats, no `\uXXXX` — both rejected, never misparsed |
 | Plugin language | **KPL** (in-tree lexer/parser/interpreter) | Replaces Lua/sol2 entirely |
 | Process execution | POSIX `posix_spawn` / `fork`+`execve` | argv-array based, no `system()` |
 | Plugin fetch | `posix_spawn` of system `git` | Git is a *runtime* tool, not a link dependency |
 | Filesystem | `std::filesystem` + POSIX `stat` | |
 | String/format | `std::string`, `std::format` (or small polyfill) | |
-| Hashing (cache keys) | In-tree FNV-1a or similar | No OpenSSL requirement |
+| Hashing (cache keys) | In-tree FNV-1a (`core/hash.hpp`) | No OpenSSL requirement. Cache keys only, never a trust decision |
+| KPL AST cache | In-tree little-endian encoding (`core/kapc.hpp`) | §5.14. Magic + format version + bounds-checked decode; any problem falls back to parsing |
 | Build system for kap itself | CMake + Ninja | CMake is a *dev* tool, not linked |
 | Testing | In-tree micro test harness | `kap_test` macro, no Catch2/GTest |
 | Containers | Docker (dev only) | Not linked; synchronizes dev environment |
@@ -943,15 +1024,40 @@ diagnostics with line numbers. ✅
 - [x] Type checker for expressions and `step` statements
 - [x] Tree-walk interpreter with `project` host object (mocked in tests)
 - [x] `report_freed_space`, `concurrent` modifiers
-- [ ] AST binary cache (`.kapc`)
-- [ ] `kap plugin test <name>` — compare steps against `expected/*.json`
+- [x] AST binary cache (`.kapc`)
+- [x] `kap plugin test <name>` — compare steps against `expected/*.json`
 
 **Exit criteria:** `cmake-cpp` and `cargo-rust` fixture tests pass without
-executing real build tools.
+executing real build tools. ✅ — 7 fixture cases across the two bundled
+plugins, green under `./scripts/ci.sh` on a machine with no cmake, cargo, or
+ninja installed. 222 unit tests + 59 end-to-end assertions, clean under
+`-DKAP_SANITIZE=ON`.
+
+**Notes for later milestones.**
+
+The interpreter implements the whole of §5.8 (`project.exists/read/glob/tool/
+env`, `len`, `contains`, `trim`, `split`) and all of §5.9's control flow.
+`host_project()` in `core/kpl.cpp` is where §7's sandbox lives: one choke point
+canonicalises every plugin-supplied path and refuses anything outside the
+project root, reads inherit `fs::read_text`'s 1 MiB cap, globs inherit
+`fs::glob`'s 10 000-result cap and only wildcard the final path component, and
+`project.env` applies a deny-list (`*_TOKEN`, `*_KEY`, `*_SECRET`,
+`*_PASSWORD`, `AWS_*`, ...). `project.tool` scans `PATH` with `access(X_OK)`
+and never spawns.
+
+Two v1 limits worth knowing before writing a plugin. There is no catch-all
+`match` pattern, so a `match` over a `str` is only usable when the arms cover
+every value the plugin can produce; over a schema `enum` the checker proves
+coverage. And `for` iterates lists only — the numeric-range form is in the
+post-v1 backlog and no bundled plugin needs it.
+
+Milestone 4 inherits two things ready to use: `detect` blocks now parse into
+directive statements (name + arguments) that compile straight to a
+`DetectRuleTable`, and `core/json.hpp` is the parser `.kap/cache.json` needs.
 
 ---
 
-### Milestone 4 — Detection engine
+### Milestone 4 — Detection engine ⬅ **next**
 **Goal:** Given installed plugins, pick the right one for a directory.
 
 - [ ] Extract `detect` rules from AST at plugin load
