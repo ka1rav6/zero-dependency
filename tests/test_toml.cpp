@@ -105,46 +105,22 @@ KAP_TEST("parse errors carry a located diagnostic (line:col)")
 
 KAP_TEST("duplicate keys are rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("a = 1\na = 2\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("a = 1\na = 2\n"));
 });
 
 KAP_TEST("unknown escape sequences are rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("s = \"\\q\"\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("s = \"\\q\"\n"));
 });
 
 KAP_TEST("unterminated strings are rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("s = \"unclosed\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("s = \"unclosed\n"));
 });
 
 KAP_TEST("table conflicts with an existing scalar are rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("plugins = \"gone\"\n[plugins.cmake-cpp]\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("plugins = \"gone\"\n[plugins.cmake-cpp]\n"));
 });
 // --- Regression tests for the section-header retargeting bug ---------------------
 // A `[header]` line must re-point where subsequent `key = value` lines land.
@@ -207,13 +183,7 @@ KAP_TEST("the same key name may repeat in different tables")
 
 KAP_TEST("a table defined twice is rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("[server]\na = 1\n[server]\nb = 2\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("[server]\na = 1\n[server]\nb = 2\n"));
 });
 
 // --- Lexical robustness ----------------------------------------------------------
@@ -246,13 +216,7 @@ KAP_TEST("spaces are allowed around the dots of a table header")
 
 KAP_TEST("integers with leading zeros are rejected")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("port = 0080\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("port = 0080\n"));
 });
 
 KAP_TEST("a bare zero is still a valid integer")
@@ -267,35 +231,17 @@ KAP_TEST("an explicit plus sign parses")
 
 KAP_TEST("integers that overflow int64 are rejected, not wrapped")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("n = 99999999999999999999\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("n = 99999999999999999999\n"));
 });
 
 KAP_TEST("a string ending in a lone backslash is unterminated, not a crash")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("s = \"oops\\");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("s = \"oops\\"));
 });
 
 KAP_TEST("an unclosed array is rejected rather than looping forever")
 {
-    bool threw = false;
-    try {
-        kap::toml::parse("xs = [1, 2\n");
-    } catch (const kap::diag::Error&) {
-        threw = true;
-    }
-    KAP_ASSERT(threw);
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::toml::parse("xs = [1, 2\n"));
 });
 
 KAP_TEST("Value factories set the kind and payload together")

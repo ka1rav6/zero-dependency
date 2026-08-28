@@ -124,19 +124,82 @@ template <typename T> std::string to_string_display(const T& v)
         }                                                                                          \
     } while (0)
 
-// Assert (content) equality between two values. Values are rendered through
-// to_string_display, so two C-strings compare by content, not by pointer.
+// Assert equality between two values.
+//
+// The comparison uses the values' own `operator==`, NOT their rendered text.
+// An earlier version compared to_string_display(a) against to_string_display(b),
+// which meant the assertion passed whenever two values merely *printed* the
+// same — std::string("1") "equalled" the integer 1, and any type whose display
+// form loses information (a truncated float, a pointer shown as its target)
+// could hide a real mismatch. Rendering is now only used to build the failure
+// message, which is what it is actually good for.
+//
+// Both operands are bound *by value* rather than by reference. Binding
+// `const auto&` to an expression like `doc.get("k")->str` would reference a
+// member of an already-destroyed temporary std::optional: lifetime extension
+// applies only when a reference binds directly to a prvalue, not when it binds
+// to something reachable *through* one. Copying also makes the guarantee below
+// real — each operand expression is evaluated exactly once, so an assertion on
+// a side-effecting call cannot double-fire.
 #define KAP_ASSERT_EQ(a, b)                                                                        \
     do {                                                                                           \
-        const auto&       kap_test_lhs   = (a);                                                    \
-        const auto&       kap_test_rhs   = (b);                                                    \
-        const std::string kap_test_left  = ::kap_test::to_string_display(kap_test_lhs);            \
-        const std::string kap_test_right = ::kap_test::to_string_display(kap_test_rhs);            \
-        if (kap_test_left != kap_test_right) {                                                     \
+        const auto kap_test_lhs = (a);                                                             \
+        const auto kap_test_rhs = (b);                                                              \
+        if (!(kap_test_lhs == kap_test_rhs)) {                                                     \
             ::kap_test::fail_test(__FILE__,                                                        \
                                   __LINE__,                                                        \
                                   std::string("expected '") + #a + "' == '" + #b + "' but got '" + \
-                                      kap_test_left + "' vs '" + kap_test_right + "'");            \
+                                      ::kap_test::to_string_display(kap_test_lhs) + "' vs '" +     \
+                                      ::kap_test::to_string_display(kap_test_rhs) + "'");          \
+        }                                                                                          \
+    } while (0)
+
+// The inverse of KAP_ASSERT_EQ, for "these must not collapse into each other"
+// properties (e.g. two different words must quote differently).
+#define KAP_ASSERT_NE(a, b)                                                                        \
+    do {                                                                                           \
+        const auto kap_test_lhs = (a);                                                             \
+        const auto kap_test_rhs = (b);                                                              \
+        if (kap_test_lhs == kap_test_rhs) {                                                        \
+            ::kap_test::fail_test(__FILE__,                                                        \
+                                  __LINE__,                                                        \
+                                  std::string("expected '") + #a + "' != '" + #b +                 \
+                                      "' but both are '" +                                         \
+                                      ::kap_test::to_string_display(kap_test_lhs) + "'");           \
+        }                                                                                          \
+    } while (0)
+
+// Assert that `expr` throws `exception_type`.
+//
+// kap's whole error story is "throw a diag::Error with a location attached"
+// (core/diag.hpp), so nearly every parser test needs to check a failure path.
+// Written by hand that is six lines of try/catch boilerplate per case, and the
+// easy mistake — forgetting to assert that the throw actually happened — makes
+// the test pass even when nothing is thrown. This macro cannot be written
+// wrongly that way.
+//
+// Note the deliberate ordering of the catch clauses: an unrelated exception is
+// reported as its own distinct failure ("threw the wrong type") rather than
+// being counted as success.
+#define KAP_ASSERT_THROWS(exception_type, expr)                                                    \
+    do {                                                                                           \
+        bool kap_test_threw = false;                                                               \
+        try {                                                                                      \
+            (void)(expr);                                                                          \
+        } catch (const exception_type&) {                                                          \
+            kap_test_threw = true;                                                                 \
+        } catch (const std::exception& kap_test_other) {                                           \
+            ::kap_test::fail_test(__FILE__,                                                        \
+                                  __LINE__,                                                        \
+                                  std::string("expected '") + #expr + "' to throw " +              \
+                                      #exception_type + " but it threw something else: " +         \
+                                      kap_test_other.what());                                      \
+        }                                                                                          \
+        if (!kap_test_threw) {                                                                     \
+            ::kap_test::fail_test(__FILE__,                                                        \
+                                  __LINE__,                                                        \
+                                  std::string("expected '") + #expr + "' to throw " +              \
+                                      #exception_type + " but it returned normally");              \
         }                                                                                          \
     } while (0)
 

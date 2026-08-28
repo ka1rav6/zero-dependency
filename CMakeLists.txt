@@ -24,13 +24,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# --- kap binary ---------------------------------------------------------------
-# Milestone 0: an empty binary that prints its version and exits 0. The real
-# subsystems (cli, detection, kpl) arrive in later milestones.
-add_executable(kap core/main.cpp)
+# --- kap_core library ---------------------------------------------------------
+# Shared infrastructure (design doc Milestone 1): TOML parsing + CLI parsing
+# live here as real TUs so the binary and the tests link the same code; the
+# small header-only modules (diag, argv, fs) are included directly.
+add_library(kap_core STATIC
+    core/toml.cpp
+    core/cli.cpp
+)
+# Let `#include "core/..."` resolve from the repository root for consumers.
+target_include_directories(kap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Let `#include "core/version.hpp"` resolve from the repository root.
-target_include_directories(kap PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# --- kap binary ---------------------------------------------------------------
+add_executable(kap core/main.cpp)
+target_link_libraries(kap PRIVATE kap_core)
 
 # --- Tests ---------------------------------------------------------------------
 # In-tree, zero-dependency test harness design doc §9 mandates (no Catch2 /
@@ -41,9 +48,15 @@ enable_testing()
 add_executable(
     kap_tests
     tests/test_main.cpp
+    tests/test_harness.cpp
+    tests/test_diag.cpp
+    tests/test_argv.cpp
+    tests/test_fs.cpp
+    tests/test_toml.cpp
+    tests/test_cli.cpp
     tests/test_version.cpp
 )
-target_include_directories(kap_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(kap_tests PRIVATE kap_core)
 
 add_test(NAME kap_unit_tests COMMAND kap_tests)
 
@@ -53,4 +66,14 @@ add_test(NAME kap_version_smoke COMMAND kap --version)
 set_tests_properties(
     kap_version_smoke
     PROPERTIES PASS_REGULAR_EXPRESSION "kap ${PROJECT_VERSION}"
+)
+
+# Milestone-1 exit-criteria smoke test: `kap config get` reads a TOML file.
+# The command runs under CMake's working directory, so we point it at the
+# fixture via --root.
+add_test(NAME kap_config_get_smoke
+         COMMAND kap config get --root "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/config" server.host)
+set_tests_properties(
+    kap_config_get_smoke
+    PROPERTIES PASS_REGULAR_EXPRESSION "localhost"
 )
