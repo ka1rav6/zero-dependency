@@ -535,15 +535,24 @@ private:
 
     Expr conditional()
     {
-        Expr result = binary(1);
-        if (match_text("then")) {
-            Expr chosen = expression();
-            consume_text("else");
-            Expr fallback   = expression();
-            Expr condition  = std::move(result);
-            result.kind     = Expr::Kind::Conditional;
-            result.children = {std::move(condition), std::move(chosen), std::move(fallback)};
-        }
+        Expr condition = binary(1);
+        if (!check_text("then"))
+            return condition;
+
+        // The `then` token is the node's anchor for diagnostics. The previous
+        // version reused the `result` object it had just moved *from* as the
+        // node, so the Conditional carried a moved-from Token: empty file
+        // text, and whatever line/column the moved-from int members happened
+        // to keep. Building a fresh node is both clearer and correct.
+        const Token keyword = tokens_[position_++];
+        Expr        chosen  = expression();
+        consume_text("else");
+        Expr fallback = expression();
+
+        Expr result;
+        result.kind     = Expr::Kind::Conditional;
+        result.token    = keyword;
+        result.children = {std::move(condition), std::move(chosen), std::move(fallback)};
         return result;
     }
 
@@ -705,7 +714,9 @@ private:
 Plugin parse(std::string_view source, std::string source_name)
 {
     std::vector<Token> tokens = lex(source, source_name);
-    return Parser{std::move(tokens), std::move(source_name)}.run();
+    Plugin             plugin = Parser{std::move(tokens), source_name}.run();
+    plugin.source_name        = std::move(source_name);
+    return plugin;
 }
 
 Value Value::none()
@@ -1141,9 +1152,11 @@ namespace
 class Evaluator
 {
 public:
-    Evaluator(const Project&                      project,
+    Evaluator(std::string                         source_name,
+              const Project&                      project,
               const std::map<std::string, Value>& config,
               const std::vector<std::string>&     extra)
+        : source_name_(std::move(source_name))
     {
         environment_["config"]  = Value::record_value(config);
         environment_["extra"]   = strings_to_value(extra);
@@ -1458,8 +1471,8 @@ private:
         }
     }
 
-    const Project*               project_ = nullptr;
     std::string                  source_name_;
+    const Project*               project_ = nullptr;
     std::map<std::string, Value> environment_;
     CommandSpec                  spec_;
 };
@@ -1474,7 +1487,7 @@ CommandSpec evaluate(const Plugin&                       plugin,
 {
     for (const Command& command : plugin.commands) {
         if (command.name == command_name)
-            return Evaluator{project, config, extra}.run(command);
+            return Evaluator{plugin.source_name, project, config, extra}.run(command);
     }
     throw diag::Error{diag::error("unknown command '" + std::string(command_name) + "'")};
 }

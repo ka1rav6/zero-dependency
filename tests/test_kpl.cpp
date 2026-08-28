@@ -269,3 +269,45 @@ KAP_TEST("KPL equality compares lists and records structurally")
     KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("length"));
     KAP_ASSERT_EQ(spec.steps[2].command[0], std::string("none"));
 });
+
+// --- Regression tests: diagnostics -----------------------------------------------
+
+KAP_TEST("KPL run-time errors name the plugin source file")
+{
+    // Regression: the evaluator's source name was never initialised, so every
+    // run-time diagnostic rendered as "<unknown>:line:col" no matter which
+    // plugin raised it. The name now rides on the AST.
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {\n"
+                                                     "  step nope.missing\n"
+                                                     "}\n",
+                                        "cmake-cpp/plugin.kpl");
+    const kap::kpl::Project project{};
+    try {
+        kap::kpl::evaluate(plugin, "build", project);
+        KAP_ASSERT(false);
+    }
+    catch (const kap::diag::Error& error) {
+        KAP_ASSERT(error.report().find("cmake-cpp/plugin.kpl:2:") != std::string::npos);
+    }
+});
+
+KAP_TEST("KPL inline conditional keeps its source location")
+{
+    // Regression: the parser built the Conditional node out of an object it
+    // had already moved from, losing the token — and with it the line/column
+    // every diagnostic about that node needs.
+    const auto              plugin = kap::kpl::parse("command build(project, config, extra) {\n"
+                                                     "  let x = \"s\" then \"a\" else \"b\"\n"
+                                                     "  step x\n"
+                                                     "}\n",
+                                        "plugin.kpl");
+    const kap::kpl::Project project{};
+    try {
+        kap::kpl::evaluate(plugin, "build", project);
+        KAP_ASSERT(false);
+    }
+    catch (const kap::diag::Error& error) {
+        KAP_ASSERT_EQ(error.diagnostic().location.line, 2);
+        KAP_ASSERT(error.diagnostic().location.col > 0);
+    }
+});

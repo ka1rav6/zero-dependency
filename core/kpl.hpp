@@ -123,6 +123,12 @@ struct Command
 
 struct Plugin
 {
+    // Where this plugin was parsed from ("<name>/plugin.kpl", or empty for an
+    // in-memory source). Carried on the AST rather than passed separately so
+    // that run-time diagnostics — raised long after parsing, from evaluate() —
+    // can still name the file the plugin author has to open.
+    std::string source_name;
+
     std::optional<Block> manifest;
     std::optional<Block> detect;
     std::optional<Block> requires_block;
