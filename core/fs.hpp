@@ -194,30 +194,60 @@ inline std::string read_text(const std::filesystem::path& path, std::size_t max_
         throw diag::Error{diag::error("cannot open '" + path.string() + "' for reading")};
     }
 
-    // Read at most max_bytes + 1 bytes and reject if that extra byte
-    // materialises. Enforcing the cap on the *stream* rather than on a stat()
-    // result is what makes it a real bound: the file could be a FIFO or a
-    // character device, where file_size() reports 0 while the stream is
-    // endless. Sizing off stat and then slurping the whole stream — the
-    // previous approach — would read /dev/zero forever, which is precisely the
-    // hang the cap exists to prevent (design doc §7).
-    std::string out;
-    out.resize(max_bytes + 1);
-    in.read(out.data(), static_cast<std::streamsize>(out.size()));
+    // The cap is enforced by reading at most max_bytes + 1 bytes and rejecting
+    // the file if that extra byte materialises.
+    //
+    // Enforcing it on the *stream* rather than on a stat() result is what makes
+    // it a real bound. stat can disagree with reality in both directions: a
+    // character device such as /dev/zero reports a size of zero while yielding
+    // bytes forever (the is_regular_file gate above already turns those away,
+    // but the check costs nothing and the two together are what the guarantee
+    // rests on), and an ordinary file being appended to can grow between the
+    // stat and the read. Sizing off stat and then slurping the whole stream —
+    // the original implementation — was unbounded in both cases.
+    //
+    // stat is still used, as a *hint* for the initial allocation. Without it
+    // every read of a 200-byte config file would allocate and zero a full
+    // megabyte; with it, the common case is one exactly-sized allocation and
+    // one read. Because the hint is only an optimisation, a wrong one costs a
+    // reallocation rather than correctness.
+    std::uintmax_t    hinted = std::filesystem::file_size(path, ec);
+    const std::size_t capacity =
+        (!ec && hinted < max_bytes) ? static_cast<std::size_t>(hinted) + 1 : max_bytes + 1;
 
-    // A failed read is only an error if it did not simply hit end-of-file.
-    if (in.bad()) {
-        throw diag::Error{diag::error("I/O error while reading '" + path.string() + "'")};
+    std::string out;
+    out.resize(capacity);
+
+    std::size_t total = 0;
+    for (;;) {
+        in.read(out.data() + total, static_cast<std::streamsize>(out.size() - total));
+
+        // bad() is a real I/O failure; fail() alone just means we hit EOF
+        // before filling the buffer, which is the normal case.
+        if (in.bad()) {
+            throw diag::Error{diag::error("I/O error while reading '" + path.string() + "'")};
+        }
+        total += static_cast<std::size_t>(in.gcount());
+
+        if (total < out.size()) {
+            break; // short read: end of file
+        }
+        if (out.size() > max_bytes) {
+            break; // buffer already covers the cap probe; stop and report
+        }
+        // The hint under-reported the size. Grow to the full cap probe and
+        // keep reading; clear() drops the eofbit a short read may have set.
+        out.resize(max_bytes + 1);
+        in.clear();
     }
 
-    const std::size_t got = static_cast<std::size_t>(in.gcount());
-    if (got > max_bytes) {
+    if (total > max_bytes) {
         throw diag::Error{diag::error("refusing to read '" + path.string() +
                                       "': file is larger than the " + std::to_string(max_bytes) +
                                       "-byte cap (design doc §7)")};
     }
 
-    out.resize(got);
+    out.resize(total);
     return out;
 }
 

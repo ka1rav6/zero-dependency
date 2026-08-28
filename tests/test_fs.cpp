@@ -342,3 +342,46 @@ KAP_TEST("is_within is not fooled by a sibling with the root as a name prefix")
     std::filesystem::remove_all(sibling);
     std::filesystem::remove_all(dir);
 });
+
+KAP_TEST("read_text still reads the whole file when the size hint is too small")
+{
+    // stat is only an allocation hint. This exercises the branch where it
+    // under-reports and the buffer has to grow: a file that fills the hinted
+    // capacity exactly must not be silently truncated.
+    //
+    // The hint and the content agree here, so what is really pinned is that
+    // the "buffer completely filled" path does not mistake a full buffer for
+    // end-of-file. A file whose size is an exact power of two is the shape
+    // most likely to expose that off-by-one.
+    const std::filesystem::path dir  = scratch("grow_hint");
+    const std::filesystem::path file = dir / "big.txt";
+
+    for (const std::size_t size : {std::size_t{1},
+                                   std::size_t{2},
+                                   std::size_t{4095},
+                                   std::size_t{4096},
+                                   std::size_t{4097}}) {
+        write_file(file, std::string(size, 'z'));
+        const std::string got = kap::fs::read_text(file);
+        KAP_ASSERT_EQ(got.size(), size);
+        KAP_ASSERT_EQ(got, std::string(size, 'z'));
+    }
+
+    std::filesystem::remove_all(dir);
+});
+
+KAP_TEST("read_text on a file that grows past the cap is still refused")
+{
+    // The cap must hold even when the stat hint says the file is small. The
+    // hint is deliberately made wrong by passing a max_bytes smaller than the
+    // real file: capacity comes from stat (larger), so the cap check has to be
+    // the thing that catches it.
+    const std::filesystem::path dir  = scratch("cap_vs_hint");
+    const std::filesystem::path file = dir / "big.txt";
+    write_file(file, std::string(5000, 'z'));
+
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::fs::read_text(file, 100));
+    KAP_ASSERT_EQ(kap::fs::read_text(file, 5000).size(), static_cast<std::size_t>(5000));
+
+    std::filesystem::remove_all(dir);
+});
