@@ -1473,6 +1473,10 @@ private:
                 error("a record step must be the only argument to `step`", argument.token);
                 continue;
             }
+            // Mirror of Evaluator::step_argument(): a lone unbound identifier
+            // in step position is a bare program word, not an unknown name.
+            if (argument.kind == Expr::Kind::Name && values_.count(argument.token.text) == 0)
+                continue;
             const StaticType type = expression(argument);
             if (type != StaticType::String && type != StaticType::ListString &&
                 type != StaticType::ListUnknown && type != StaticType::Unknown)
@@ -2085,7 +2089,7 @@ private:
     {
         if (statement.expressions.size() == 1) {
             const Expr& only  = statement.expressions.front();
-            const Value value = expression(only);
+            const Value value = step_argument(only);
             if (value.kind == Value::Kind::Record) {
                 spec_.steps.push_back(step_from_record(value, only.token));
                 return;
@@ -2099,10 +2103,30 @@ private:
         values.reserve(statement.expressions.size());
         tokens.reserve(statement.expressions.size());
         for (const Expr& argument : statement.expressions) {
-            values.push_back(expression(argument));
+            values.push_back(step_argument(argument));
             tokens.push_back(argument.token);
         }
         spec_.steps.push_back(step_from_words(values, tokens, statement.token));
+    }
+
+    // Evaluate one `step` argument, applying the bare-word rule.
+    //
+    // Design doc §5.3 writes `step mkdir "-p" dir` and `step rm "-rf"
+    // config.build_dir`: `mkdir` and `rm` are program names, `dir` is a
+    // variable. Both are bare identifiers, so the only rule that makes both
+    // examples work is "resolve it as a variable if one is bound, otherwise
+    // take it as the literal word".
+    //
+    // The rule is deliberately narrow — it applies ONLY to an identifier
+    // standing alone as a step argument, never inside a larger expression, so
+    // `step [name]` or `step name + ".txt"` still demand a real binding. The
+    // tradeoff it buys (a mistyped variable becomes a bare word instead of an
+    // error) is confined to the one position where the design doc requires it.
+    Value step_argument(const Expr& argument)
+    {
+        if (argument.kind == Expr::Kind::Name && environment_.count(argument.token.text) == 0)
+            return Value::string_value(argument.token.text);
+        return expression(argument);
     }
 
     // Flatten argv arguments: a string contributes one word, a list splices in

@@ -348,7 +348,10 @@ KAP_TEST("KPL commands only see the parameters they declare")
     // Regression: the environment was pre-loaded with project/config/extra
     // regardless of the signature, so a command could read a host value it
     // never asked for.
-    const auto plugin = kap::kpl::parse("command clean(project, config) { step extra }");
+    // The probe is `let`, not `step`: a lone identifier in step position is a
+    // bare program word (see the bare-word tests below), so it would not
+    // surface an unbound name.
+    const auto plugin = kap::kpl::parse("command clean(project, config) { let e = extra step e }");
     const kap::kpl::Project project{};
     KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(plugin, "clean", project, {}, {"x"}));
 
@@ -659,8 +662,8 @@ KAP_TEST("KPL for over an empty list runs its body zero times")
 
 KAP_TEST("KPL scopes the for loop variable to the loop")
 {
-    const auto plugin =
-        kap::kpl::parse("command dev(project, extra) { for w in extra { step w } step w }");
+    const auto plugin = kap::kpl::parse(
+        "command dev(project, extra) { for w in extra { step w } let after = w step after }");
     const auto errors = kap::kpl::type_check(plugin);
     KAP_ASSERT_EQ(errors.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(errors[0].find("unknown name 'w'") != std::string::npos);
@@ -854,4 +857,57 @@ KAP_TEST("KPL rejects malformed record steps")
 
     const auto mixed = kap::kpl::parse("command build(project) { step \"a\" { cmd: [\"x\"] } }");
     KAP_ASSERT(!kap::kpl::type_check(mixed).empty());
+});
+
+// --- Bare-word step arguments (design doc §5.3 / §5.4) ---------------------------
+
+KAP_TEST("KPL treats an unbound identifier in step position as a bare word")
+{
+    // Design doc §5.3 writes `step mkdir "-p" dir`: `mkdir` is a program name
+    // and `dir` is a variable, both bare identifiers. The rule that makes both
+    // work is "bound name wins, otherwise the literal word".
+    const auto plugin = kap::kpl::parse("command build(project, config) {"
+                                        "  let dir = config.build_dir"
+                                        "  step mkdir \"-p\" dir"
+                                        "  step rm \"-rf\" config.build_dir"
+                                        "}");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(
+        plugin, "build", project, {{"build_dir", kap::kpl::Value::string_value("out")}});
+
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("mkdir"));
+    KAP_ASSERT_EQ(spec.steps[0].command[2], std::string("out"));
+    KAP_ASSERT_EQ(spec.steps[1].command[0], std::string("rm"));
+    KAP_ASSERT_EQ(spec.steps[1].command[2], std::string("out"));
+});
+
+KAP_TEST("KPL bare words do not apply inside a larger expression")
+{
+    // The rule is confined to a lone identifier directly in step position, so
+    // a genuinely unbound name used in an expression is still an error.
+    const auto in_list   = kap::kpl::parse("command build(project) { step [mkdir] }");
+    const auto in_concat = kap::kpl::parse("command build(project) { step mkdir + \"x\" }");
+
+    KAP_ASSERT(!kap::kpl::type_check(in_list).empty());
+    KAP_ASSERT(!kap::kpl::type_check(in_concat).empty());
+
+    const kap::kpl::Project project{};
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(in_list, "build", project));
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::kpl::evaluate(in_concat, "build", project));
+});
+
+KAP_TEST("KPL prefers a bound variable over a bare word of the same name")
+{
+    const auto              plugin = kap::kpl::parse("command build(project) {"
+                                                     "  let cmake = [\"cmake\", \"--build\", \"build\"]"
+                                                     "  step cmake"
+                                                     "}");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT_EQ(spec.steps[0].command.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(spec.steps[0].command[1], std::string("--build"));
 });
