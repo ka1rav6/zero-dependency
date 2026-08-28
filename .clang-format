@@ -1,0 +1,141 @@
+# -- zero-dependency .clang-format -------------------------------------------
+#
+# This file is the single source of truth for how every .cpp/.hpp file in this
+# repository is formatted. Run clang-format on any file or directory and this
+# exact style will be applied:
+#
+#     clang-format -i src/core/*.cpp src/core/*.hpp
+#
+# Why this style exists:
+#   * 4-space indentation, no tabs, so code looks the same on every machine
+#     and in every editor.
+#   * Allman-ish braces on top-level constructs (namespace/class/function)
+#     make block boundaries visually obvious -- readability for beginners is
+#     a project goal (see AGENTS.md).
+#   * A 100-column limit keeps lines short enough to read side by side while
+#     leaving room for the wide, descriptive names this project favours.
+#
+# NOTE: this whole file uses the clang-format YAML subset. A `#` comment is
+#       exactly like a `//` comment in C++: it explains *why*, not *what*.
+
+# We format C++ only (the project has no other formatable languages).
+Language: Cpp
+
+# Start from clang-format's well-tested LLVM defaults, then override the
+# decisions that matter to this project below. Keeping a well-known base
+# means we inherit sensible fallbacks for the many options we do not list.
+BasedOnStyle: LLVM
+
+# --- Indentation ------------------------------------------------------------
+IndentWidth: 4 # 4 spaces per indent level.
+TabWidth: 4 # visual tab = 4 columns.
+UseTab: Never # hard tabs are forbidden.
+ContinuationIndentWidth: 4 # wrapped args indent 4 too.
+ConstructorInitializerIndentWidth: 4 # ctor-init list indents 4.
+AccessModifierOffset:
+  -4 # public:/private: sit with
+  #   the class name, body indents.
+NamespaceIndentation: None # do NOT indent namespace bodies.
+
+# --- Line length ------------------------------------------------------------
+ColumnLimit: 100 # hard 100-column ceiling.
+AllowShortFunctionsOnASingleLine:
+  Empty # `void f() {}` ok, real
+  #   bodies always wrap.
+AllowShortIfStatementsOnASingleLine: Never # every if body gets its own line.
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+MaxEmptyLinesToKeep:
+  1 # at most 1 blank line between
+  #   statements/groups.
+
+# --- Braces (Allman-ish) ------------------------------------------------------
+# Braces open on a new line for everything that *defines a scope boundary*
+# (namespace, class/struct/enum, function). Control statements keep the
+# opening brace attached (e.g. `if (x) {`) -- the common, readable default.
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass:
+    true # class Foo
+    # {
+  AfterFunction:
+    true # void f()
+    # {
+  AfterNamespace: true
+  AfterStruct: true
+  AfterEnum: true
+  AfterUnion: true
+  AfterControlStatement: Never # if (x) {
+  BeforeCatch:
+    true # }
+    # catch
+  BeforeElse: false # } else {
+  BeforeLambdaBody: false
+  SplitEmptyFunction: false # void f() {}
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# --- Spaces -----------------------------------------------------------------
+SpaceBeforeParens:
+  ControlStatements # `if (`, `for (`, `while (`
+  #   but `f(` as-is.
+SpaceAfterCStyleCast: true # `(int) x` not `(int)x`.
+SpaceAfterTemplateKeyword: true # `template <` not `template<`.
+SpaceInEmptyParentheses: false # `f()` not `f( )`.
+SpacesInAngles: false # `vector<int>` not `vector< int >`.
+SpacesInRoundBrackets: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeRangeBasedForLoopColon: true # `for (auto& x : xs)`.
+
+# --- Pointers & references ---------------------------------------------------
+# Pointers/references bind to the type: `int* p`, `const std::string& s`.
+# This matches how the standard library and most C++ APIs read aloud.
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# --- Alignment --------------------------------------------------------------
+# Align related lines with each other -- makes tables of declarations or
+# assignments much easier to scan, which helps beginners trace values.
+AlignAfterOpenBracket: Align # break after `(` lines up.
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignTrailingComments: true # trailing // comments align.
+AlignOperands:
+  Align # wrapped `a + b` lines line up
+  #   under the operator column.
+BinPackArguments:
+  false # one argument per line once
+  #   a wrap happens.
+BinPackParameters: false
+
+# --- Initializer lists -------------------------------------------------------
+BreakConstructorInitializers:
+  BeforeColon # `: a_{..}` starts a fresh
+  #   indented block each member.
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+
+# --- Preprocessor / includes --------------------------------------------------
+SortIncludes:
+  CaseSensitive # keep #includes sorted so
+  #   dedup is easy to eyeball.
+SortUsingDeclarations: true
+IndentPPDirectives: None # don't indent #if bodies weirdly.
+IncludeBlocks:
+  Preserve # preserve explicit grouping
+  #   (header / std / POSIX blocks).
+
+# --- Misc ----------------------------------------------------------------
+IndentCaseLabels: true # `case X:` indented inside switch.
+IndentCaseBlocks: true
+AllowAllArgumentsOnNextLine: true
+SeparateDefinitionBlocks:
+  Always # blank line between function
+  #   definitions.
+ReflowComments:
+  true # let clang-format re-wrap long
+  #   // comments to 100 cols.
+Standard:
+  Latest # modern C++ semantics for the
+  #   formatter (project uses C++17+).
+
