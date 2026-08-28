@@ -1,0 +1,21 @@
+# .github/workflows/ci.yml
+#
+# Every push/PR is verified inside the exact same dev container that
+# contributors use (design doc §10.5/10.6), so host toolchain drift cannot
+# sneak into a green pipeline.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the dev image
+        run: docker compose build dev
+      - name: Configure, build, unit test, and smoke-test
+        run: docker compose run --rm dev ./scripts/ci.sh
