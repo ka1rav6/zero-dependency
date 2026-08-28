@@ -13,13 +13,17 @@
 # bats/shunit2 (AGENTS.md §6).
 #
 # Usage:
-#     tests/e2e.sh <path-to-kap-binary>
+#     tests/e2e.sh <path-to-kap-binary> <expected-version>
 #
-# CTest invokes it via the `kap_e2e` test registered in CMakeLists.txt.
+# CTest invokes it via the `kap_e2e` test registered in CMakeLists.txt, passing
+# CMake's PROJECT_VERSION — which CMake itself reads out of core/version.hpp.
+# The expected version is a parameter rather than a literal precisely so this
+# file is not a fourth place the version number has to be bumped by hand.
 
 set -uo pipefail   # NOT -e: a failing assertion must be recorded, not fatal
 
-kap_bin="${1:?usage: e2e.sh <path-to-kap-binary>}"
+kap_bin="${1:?usage: e2e.sh <path-to-kap-binary> <expected-version>}"
+kap_version="${2:?usage: e2e.sh <path-to-kap-binary> <expected-version>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture="$repo_root/tests/fixtures/config"
 
@@ -82,10 +86,10 @@ expect_empty_stdout() {
 
 # --- version and help -------------------------------------------------------------
 
-expect_stdout "--version prints the banner" "kap 0.1.0" --version
-expect_stdout "-V is the short form of --version" "kap 0.1.0" -V
+expect_stdout "--version prints the banner" "kap $kap_version" --version
+expect_stdout "-V is the short form of --version" "kap $kap_version" -V
 expect_status "--version exits 0" 0 --version
-expect_stdout "a bare invocation prints the version" "kap 0.1.0"
+expect_stdout "a bare invocation prints the version" "kap $kap_version"
 expect_status "a bare invocation exits 0" 0
 expect_status "--help exits 0" 0 --help
 expect_stderr_contains "--help goes to stdout, so stderr stays clean" "" --help

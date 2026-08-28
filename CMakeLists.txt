@@ -7,9 +7,37 @@
 # dependencies.
 
 cmake_minimum_required(VERSION 3.16)
-project(kap VERSION 0.1.0 DESCRIPTION
+
+# --- Version: one source of truth --------------------------------------------
+# core/version.hpp is authoritative; the binary reports what is written there.
+# Rather than repeat the number here (where it would drift the first time
+# someone bumps only one of the two), parse it out of the header. The version
+# smoke test then asserts the binary's banner against CMake's PROJECT_VERSION,
+# which closes the loop: header, build system, and test can only ever agree.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/core/version.hpp" _kap_version_header)
+string(REGEX MATCH "kVersionMajor[ \t]*=[ \t]*([0-9]+)" _m "${_kap_version_header}")
+set(KAP_VERSION_MAJOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionMinor[ \t]*=[ \t]*([0-9]+)" _m "${_kap_version_header}")
+set(KAP_VERSION_MINOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionPatch[ \t]*=[ \t]*([0-9]+)" _m "${_kap_version_header}")
+set(KAP_VERSION_PATCH "${CMAKE_MATCH_1}")
+
+if(KAP_VERSION_MAJOR STREQUAL "" OR KAP_VERSION_MINOR STREQUAL "" OR
+   KAP_VERSION_PATCH STREQUAL "")
+    message(FATAL_ERROR
+            "Could not read the version from core/version.hpp. The kVersion* "
+            "constants must stay in the form 'kVersionMajor = 0;'.")
+endif()
+
+project(kap VERSION "${KAP_VERSION_MAJOR}.${KAP_VERSION_MINOR}.${KAP_VERSION_PATCH}"
+        DESCRIPTION
         "Zero-config CLI that detects your project and runs the right tool"
         LANGUAGES CXX)
+
+# Re-run CMake when the header changes, so a version bump takes effect without
+# a manual reconfigure.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${CMAKE_CURRENT_SOURCE_DIR}/core/version.hpp")
 
 # The design doc pins C++20; require the real standard (no GNU extensions so
 # the code stays portable across GCC and Clang).
@@ -19,9 +47,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # --- Compiler hygiene --------------------------------------------------------
 # Cheap, portable warnings. Students and newcomers should get squigglies for
-# common mistakes before they ship, and CI fails on warnings anyway.
+# common mistakes before they ship.
+#
+# KAP_WERROR promotes them to errors. It is OFF by default so a local build is
+# never blocked by a warning from a compiler version we have not seen, and ON
+# in CI (scripts/ci.sh passes -DKAP_WERROR=ON) so warnings cannot accumulate on
+# main. This is not theoretical: -Wdangling-reference caught a genuine
+# use-after-free in the test harness, and -Wmissing-field-initializers flagged
+# six under-initialised aggregates in the TOML parser.
+option(KAP_WERROR "Treat compiler warnings as errors (used by CI)" OFF)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
+    if(KAP_WERROR)
+        add_compile_options(-Werror)
+    endif()
 endif()
 
 # --- kap_core library ---------------------------------------------------------
@@ -66,7 +106,7 @@ add_test(NAME kap_unit_tests COMMAND kap_tests)
 # §6) that takes the binary's path as its only argument.
 add_test(
     NAME kap_e2e
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e.sh" "$<TARGET_FILE:kap>"
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e.sh" "$<TARGET_FILE:kap>" "${PROJECT_VERSION}"
 )
 
 # Milestone-0 contract, kept as its own test so a broken version banner is
