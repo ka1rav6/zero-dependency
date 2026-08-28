@@ -4,10 +4,14 @@
 // project you're standing in and runs the right underlying tool for common
 // tasks (build, test, lint, run, ...). See docs/design.md for the full design.
 //
-// Milestone 1: the CLI parser (core/cli.hpp) and TOML parser (core/toml.hpp)
-// are now wired. The detection engine + KPL interpreter arrive in later
-// milestones; today `kap` only knows how to print its version/help and read a
-// project config file via `kap config get`.
+// Milestones 0-3 are wired: the CLI parser (core/cli.hpp), the TOML parser
+// (core/toml.hpp), and the whole KPL front-end, type checker, and interpreter
+// (core/kpl.hpp) behind `kap plugin doctor` and `kap plugin test`.
+//
+// The detection engine, the executor, and the config merge arrive in
+// Milestones 4-6. Until then there is deliberately no `kap build`: it would
+// have to guess which plugin applies, and guessing is the one thing design doc
+// §3.2 step 4 forbids.
 
 #include <exception>
 #include <filesystem>

@@ -71,3 +71,15 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# kap's own caches (design doc §3.2, §5.14)
+.kap/
+*.kapc
+
+# Plugin test fixtures are DELIBERATELY committed, and several of them are
+# named exactly like build output: a make-generic fixture needs a real
+# Makefile, a cmake fixture may want a CMakeCache.txt, a rust fixture a
+# target/ stub. The rules above would silently swallow them — `git add` would
+# report nothing wrong and the plugin's tests would fail only for the next
+# person to clone. Unignore the whole fixture tree.
+!plugins/*/tests/fixtures/**
