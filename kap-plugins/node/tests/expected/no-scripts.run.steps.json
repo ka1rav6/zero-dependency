@@ -1,0 +1,5 @@
+{
+  "command": "run",
+  "failure": "package.json declares no \"start\" script, which is what 'kap run' runs",
+  "steps": []
+}

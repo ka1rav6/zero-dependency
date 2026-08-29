@@ -1,5 +1,12 @@
 {
   "name": "simple-app",
   "version": "1.0.0",
-  "scripts": { "build": "tsc", "test": "vitest run", "dev": "vite" }
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "dev": "vite",
+    "format": "prettier .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  }
 }

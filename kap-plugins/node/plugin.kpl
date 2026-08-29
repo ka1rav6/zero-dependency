@@ -13,6 +13,18 @@ manifest {
   supersedes  = []
 }
 
+// ## Why every script-running command reads package.json first
+//
+// npm's answer to a missing script is `Missing script: "build"` and a
+// suggestion to run `npm run`. That is npm talking about npm, and it leaves out
+// the part only kap knows: that `kap build` chose the name "build", and that
+// `build_script` in kap.toml can point it somewhere else. So each command
+// checks first and reports it as kap.
+//
+// The check is a substring test for `"<name>":`, because KPL has no JSON
+// parser (§5.6 lists its four free functions). That can be fooled by the same
+// text appearing elsewhere in the file, which costs a false *pass* — the same
+// raw npm error you would have got anyway — and never a false failure.
 detect {
   file_exists "package.json"
 }
@@ -63,6 +75,10 @@ command build(project, config, extra) {
     yarn => "yarn",
     bun  => "bun",
   }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.build_script + "\":") {
+    fail "package.json declares no \"" + config.build_script + "\" script, which is what 'kap build' runs"
+  }
   step [pm, "run", config.build_script] + extra
 }
 
@@ -76,6 +92,10 @@ command test(project, config, extra) {
     pnpm => "pnpm",
     yarn => "yarn",
     bun  => "bun",
+  }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.test_script + "\":") {
+    fail "package.json declares no \"" + config.test_script + "\" script, which is what 'kap test' runs"
   }
   step [pm, "run", config.test_script] + extra
 }
@@ -91,6 +111,10 @@ command lint(project, config, extra) {
     yarn => "yarn",
     bun  => "bun",
   }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.lint_script + "\":") {
+    fail "package.json declares no \"" + config.lint_script + "\" script, which is what 'kap lint' runs"
+  }
   step [pm, "run", config.lint_script] + extra
 }
 
@@ -105,6 +129,10 @@ command check(project, config, extra) {
     yarn => "yarn",
     bun  => "bun",
   }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.check_script + "\":") {
+    fail "package.json declares no \"" + config.check_script + "\" script, which is what 'kap check' runs"
+  }
   step [pm, "run", config.check_script] + extra
 }
 
@@ -118,6 +146,10 @@ command fmt(project, config, extra) {
     pnpm => "pnpm",
     yarn => "yarn",
     bun  => "bun",
+  }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.fmt_script + "\":") {
+    fail "package.json declares no \"" + config.fmt_script + "\" script, which is what 'kap fmt' runs"
   }
   // `--` separates the package manager's own arguments from the script's, so
   // `--check` reaches prettier rather than npm.
@@ -149,6 +181,11 @@ command run(project, config, extra) {
     pnpm => "pnpm",
     yarn => "yarn",
     bun  => "bun",
+  }
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.start_script + "\":") {
+    fail "package.json declares no \"" + config.start_script + "\" script, which is what 'kap run' runs" +
+         (if contains(manifest_text, "\"dev\":") then "; this project has a \"dev\" script — try 'kap dev'" else "")
   }
   step [pm, "run", config.start_script] + extra
 }
