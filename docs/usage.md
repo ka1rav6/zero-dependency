@@ -468,6 +468,7 @@ failed", because inventing one would throw away the information you wanted.
 | `KAP_PLUGIN_PATH` | Extra plugin directories, colon-separated. Searched above your installed plugins |
 | `KAP_REGISTRY` | Path to a registry `index.toml`, overriding the usual search |
 | `KAP_BUNDLED_PLUGIN_DIR` | Override where the bundled plugins are looked for |
+| `KAP_NO_EMBEDDED_PLUGINS` | Ignore plugins compiled into the binary. Any value. Useful for answering "why is kap using a plugin I never installed?" |
 | `NO_COLOR` | Any value turns off colour |
 | `EDITOR` / `VISUAL` | Used by `kap config edit` |
 | `XDG_CONFIG_HOME` | Where `kap/config.toml` lives (default `~/.config`) |

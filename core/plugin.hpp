@@ -30,6 +30,7 @@ enum class Source
     User,         // ~/.local/share/kap/plugins/<name>/
     Bundled,      // <prefix>/share/kap/plugins/<name>/
     Repository,   // <root>/plugins/<name>/  — see DiscoveryOptions::include_repository
+    Embedded,     // compiled into the binary, materialized into the cache
 };
 
 // A human-readable name for a Source, used by `kap plugin list`.
@@ -76,6 +77,19 @@ struct DiscoveryOptions
 
     // <prefix>/share/kap/plugins, next to the binary (§6.5).
     bool include_bundled = true;
+
+    // Plugins compiled into the binary (a -DKAP_EMBED_PLUGINS=ON build). They
+    // are written into ~/.cache/kap/embedded on first use and then treated like
+    // any other directory — see core/bundled.hpp for why materializing beats
+    // interpreting them from memory.
+    //
+    // Searched *last*, below even the repository tier. An embedded plugin is a
+    // snapshot taken when the binary was compiled, so it is the weakest claim
+    // of all: a distributor's patched copy should win, and so should the
+    // plugins in the checkout a developer is editing. Putting it above the
+    // repository tier made an embedded kap ignore the very plugin.kpl its user
+    // had open.
+    bool include_embedded = true;
 
     // When non-empty, replaces $KAP_PLUGIN_PATH entirely.
     std::vector<std::filesystem::path> search_path;

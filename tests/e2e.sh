@@ -810,6 +810,186 @@ expect_status "build refuses -o" 2 build -n --root "$dev_dir" -o
 rm -rf "$dev_dir"
 unset KAP_PLUGIN_PATH
 
+# --- per-command help ---------------------------------------------------------------
+#
+# `kap install -h` used to print the global banner: the one place someone is
+# already confused, answered with a page that says nothing about what they
+# asked. Every command now has its own page.
+
+for cmd in build check ci clean dev doctor fmt install lint ports run test \
+           detect config plugin completions help; do
+    expect_status "kap $cmd --help exits 0" 0 "$cmd" --help
+    expect_stdout_contains "kap $cmd --help is about $cmd" "kap $cmd" "$cmd" --help
+done
+
+expect_status "the short form works too" 0 install -h
+expect_stdout_contains "install's page explains both meanings" "Install a PLUGIN" install -h
+expect_stdout_contains "dev's page states what -o costs" "colours" dev --help
+
+# Subcommand pages.
+expect_stdout_contains "plugin install has its own page" "kap plugin install" \
+    plugin install --help
+expect_stdout_contains "plugin new has its own page" "kap plugin new" plugin new --help
+expect_stdout_contains "plugin disable has its own page" "kap plugin disable" \
+    plugin disable --help
+
+# `kap help` as a command.
+expect_status "kap help exits 0" 0 help
+expect_stdout_contains "kap help lists the commands" "build" help
+expect_stdout_contains "kap help lists the subcommands" "plugin install" help
+expect_stdout_contains "kap help <command> works" "kap plugin install" help plugin install
+expect_status "kap help with an unknown topic exits 1" 1 help frobnicate
+
+# --help after `--` belongs to the tool, not to kap.
+help_dir="$(mktemp -d)"
+printf 'cmake_minimum_required(VERSION 3.16)\n' > "$help_dir/CMakeLists.txt"
+export KAP_PLUGIN_PATH="$repo_root/plugins"
+expect_stdout_contains "--help after -- reaches the tool" "--help" \
+    build -n --root "$help_dir" -- --help
+
+# --- `kap install <name>` (the trap, removed) ---------------------------------------
+#
+# `install` is a project command, but everyone's instinct is "install a plugin".
+# It used to be an error whose advice made it worse: it suggested
+# `kap install -- cmake-cpp`, a different wrong thing.
+
+expect_stderr_contains "kap install <name> says what it is doing" \
+    "means 'kap plugin install" install no-such-plugin-xyz --root "$help_dir"
+expect_stderr_contains "and how to get the project command" "installs the project itself" \
+    install no-such-plugin-xyz --root "$help_dir"
+expect_status "an unknown plugin name still fails" 1 \
+    install no-such-plugin-xyz --root "$help_dir"
+
+# --- a machine with no plugins gets a diagnosis, not a dead end ----------------------
+
+bare_dir="$(mktemp -d)"
+printf 'cmake_minimum_required(VERSION 3.16)\n' > "$bare_dir/CMakeLists.txt"
+unset KAP_PLUGIN_PATH
+bare_home="$(mktemp -d)"
+# KAP_NO_EMBEDDED_PLUGINS makes this reachable on a -DKAP_EMBED_PLUGINS=ON
+# build too, where every directory otherwise has a plugin — which is the point
+# of that build, and would make this assertion untestable without the switch.
+bare_out="$(HOME="$bare_home" XDG_DATA_HOME="$bare_home/data" \
+            XDG_CONFIG_HOME="$bare_home/config" XDG_CACHE_HOME="$bare_home/cache" \
+            KAP_BUNDLED_PLUGIN_DIR="$bare_home/nowhere" KAP_NO_EMBEDDED_PLUGINS=1 \
+            "$kap_bin" build --root "$bare_dir" 2>&1)"
+case "$bare_out" in
+    *"kap looked in"*) pass "no plugins names every directory searched" ;;
+    *) fail "no plugins names every directory searched" "got: $bare_out" ;;
+esac
+case "$bare_out" in
+    *"kap plugin install --bundle core"*) pass "and says how to fix it" ;;
+    *) fail "and says how to fix it" "got: $bare_out" ;;
+esac
+rm -rf "$bare_home" "$bare_dir"
+
+# --- the registry index is always available ------------------------------------------
+#
+# It is compiled into the binary, so search and name resolution work even with
+# nothing on disk. Before, a copied binary answered `kap plugin search` with
+# "no registry index found" and had no way forward.
+
+search_home="$(mktemp -d)"
+search_out="$(HOME="$search_home" XDG_DATA_HOME="$search_home/data" \
+              XDG_CONFIG_HOME="$search_home/config" XDG_CACHE_HOME="$search_home/cache" \
+              KAP_BUNDLED_PLUGIN_DIR="$search_home/nowhere" KAP_NO_EMBEDDED_PLUGINS=1 \
+              "$kap_bin" plugin search cmake --root "$search_home" 2>&1)"
+case "$search_out" in
+    *cmake-cpp*) pass "plugin search works with nothing on disk" ;;
+    *) fail "plugin search works with nothing on disk" "got: $search_out" ;;
+esac
+rm -rf "$search_home"
+
+# --- installing from an installer-script URL ------------------------------------------
+#
+# The route a third-party plugin uses. Served from loopback, which is the one
+# place kap allows plain http — everywhere else an installer URL must be https,
+# because kap runs what it downloads.
+
+expect_status "a plain-http installer URL is refused" 1 \
+    plugin install --yes http://example.invalid/install.sh
+expect_stderr_contains "and says why" "tampered with in transit" \
+    plugin install --yes http://example.invalid/install.sh
+expect_stderr_contains "and what to do instead" "use an https:// address" \
+    plugin install --yes http://example.invalid/install.sh
+
+if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    script_home="$(mktemp -d)"
+    mkdir -p "$script_home/www"
+    cat > "$script_home/www/install.sh" <<'INSTALLER'
+#!/bin/sh
+# A third-party plugin installer, exactly as docs/plugins.md describes one.
+set -eu
+cat > "$KAP_PLUGIN_DEST/plugin.kpl" <<'KPL'
+manifest { name = "e2e-zig" version = "0.3.0" api_version = 1 priority = 35 }
+detect { file_exists "build.zig" }
+requires { any_of [zig] }
+schema { release: bool = false }
+command build(project, config, extra) {
+  let flags = if config.release then ["-Doptimize=ReleaseSafe"] else []
+  step ["zig", "build"] + flags + extra
+}
+KPL
+INSTALLER
+    ( cd "$script_home/www" && exec python3 -m http.server 8791 >/dev/null 2>&1 ) &
+    server_pid=$!
+
+    # Wait for the port to answer rather than sleeping a fixed amount. A fixed
+    # sleep is either too short on a loaded machine (a flaky test) or too long
+    # on every other run (a slow suite).
+    server_ready=0
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if curl -fsS -o /dev/null "http://127.0.0.1:8791/install.sh" 2>/dev/null; then
+            server_ready=1
+            break
+        fi
+        sleep 0.25
+    done
+
+    if [ "$server_ready" -ne 1 ]; then
+        printf '[SKIP] installer-script installs (local server did not start)\n'
+    else
+    install_log="$(HOME="$script_home" XDG_DATA_HOME="$script_home/data" \
+       XDG_CACHE_HOME="$script_home/cache" XDG_CONFIG_HOME="$script_home/config" \
+       "$kap_bin" plugin install --yes http://127.0.0.1:8791/install.sh 2>&1)"
+    if [ $? -eq 0 ]; then
+        pass "a plugin installs from an installer-script URL"
+    else
+        fail "a plugin installs from an installer-script URL" "$install_log"
+    fi
+
+    listed="$(HOME="$script_home" XDG_DATA_HOME="$script_home/data" \
+              XDG_CACHE_HOME="$script_home/cache" XDG_CONFIG_HOME="$script_home/config" \
+              "$kap_bin" plugin list 2>/dev/null)"
+    case "$listed" in
+        *e2e-zig*script*) pass "and is recorded with a script origin" ;;
+        *) fail "and is recorded with a script origin" "got: $listed" ;;
+    esac
+
+    # The payload a script produces is validated like any other: a script that
+    # writes rubbish must not be able to install it.
+    cat > "$script_home/www/bad.sh" <<'INSTALLER'
+#!/bin/sh
+printf 'manifest { name = \n' > "$KAP_PLUGIN_DEST/plugin.kpl"
+INSTALLER
+    if HOME="$script_home" XDG_DATA_HOME="$script_home/data" \
+       XDG_CACHE_HOME="$script_home/cache" XDG_CONFIG_HOME="$script_home/config" \
+       "$kap_bin" plugin install --yes http://127.0.0.1:8791/bad.sh >/dev/null 2>&1; then
+        fail "a script producing a broken plugin is refused" "the install succeeded"
+    else
+        pass "a script producing a broken plugin is refused"
+    fi
+
+    fi
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+    rm -rf "$script_home"
+else
+    printf '[SKIP] installer-script installs (python3 or curl not available)\n'
+fi
+
+rm -rf "$help_dir"
+
 # --- summary ----------------------------------------------------------------------
 
 rm -rf "$e2e_home"

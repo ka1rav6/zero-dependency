@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include <unistd.h>
 
@@ -35,6 +36,26 @@ void write_file(const std::filesystem::path& path, const std::string& contents)
     std::filesystem::create_directories(path.parent_path());
     std::ofstream out(path, std::ios::binary);
     out << contents;
+}
+
+// Discover only what this test wrote.
+//
+// The bare `discover(root)` overload searches every tier §6.5 defines —
+// including the user's installed plugins and, in a -DKAP_EMBED_PLUGINS=ON
+// build, the plugins compiled into the binary. A unit test that used it would
+// pass or fail depending on what the developer happens to have installed and
+// how kap was configured, which is not a property a test should have.
+//
+// Switching the machine-wide tiers off leaves exactly the scratch tree below.
+std::vector<kap::plugin::Located> discover_only(const std::filesystem::path& root)
+{
+    kap::plugin::DiscoveryOptions options;
+    options.project_root        = root;
+    options.include_search_path = false;
+    options.include_user        = false;
+    options.include_bundled     = false;
+    options.include_embedded    = false;
+    return kap::plugin::discover(options);
 }
 
 // A minimal but complete plugin: manifest, detect rule, schema, one command.
@@ -72,7 +93,7 @@ KAP_TEST("discover finds plugin directories and skips non-plugins")
     std::filesystem::create_directories(root / "plugins" / "notes");
     write_file(root / "plugins" / "loose.txt", "ignored");
 
-    const auto found = kap::plugin::discover(root);
+    const auto found = discover_only(root);
     KAP_ASSERT_EQ(found.size(), static_cast<std::size_t>(2));
     // Sorted, so output and test expectations are stable.
     KAP_ASSERT_EQ(found[0].name, std::string("alpha"));
@@ -85,7 +106,7 @@ KAP_TEST("discover finds plugin directories and skips non-plugins")
 KAP_TEST("discover returns nothing for a root with no plugins directory")
 {
     const std::filesystem::path root = scratch_root("empty");
-    KAP_ASSERT(kap::plugin::discover(root).empty());
+    KAP_ASSERT(discover_only(root).empty());
     std::filesystem::remove_all(root);
 });
 
@@ -105,7 +126,7 @@ KAP_TEST("plugin tests pass when the spec matches the golden file")
       ]
     })");
 
-    const auto results = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto results = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(results.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(results[0].passed);
     KAP_ASSERT_EQ(results[0].name, std::string("demo.build"));
@@ -126,7 +147,7 @@ KAP_TEST("plugin tests read the real fixture tree through the sandbox")
       "steps": [ { "cmd": ["echo", "hello"] }, { "cmd": ["echo"] } ]
     })");
 
-    const auto results = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto results = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(results.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(results[0].passed);
 
@@ -143,7 +164,7 @@ KAP_TEST("plugin tests fail with both renderings when the spec differs")
       "steps": [ { "cmd": ["echo", "WRONG"] } ]
     })");
 
-    const auto results = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto results = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(results.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(!results[0].passed);
     // Both sides are shown, because "it differs" is not actionable on its own.
@@ -179,7 +200,7 @@ command build(project, config, extra) {
       "steps": [ { "cmd": ["echo", "make"] } ]
     })");
 
-    const auto results = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto results = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(results.size(), static_cast<std::size_t>(2));
     for (const auto& result : results)
         KAP_ASSERT(result.passed);
@@ -195,7 +216,7 @@ KAP_TEST("plugin tests report a plugin that does not parse or type-check")
                "manifest { name = \"t\" version = \"1\" api_version = 1 }\n"
                "command build(project) { if \"yes\" { step \"x\" } }\n");
 
-    const auto found = kap::plugin::discover(root);
+    const auto found = discover_only(root);
     KAP_ASSERT_EQ(found.size(), static_cast<std::size_t>(2));
 
     const auto syntax = kap::plugin::run_tests(found[0]);
@@ -233,7 +254,7 @@ KAP_TEST("plugin tests report malformed cases instead of skipping them")
     // A case that is not valid JSON at all.
     write_file(dir / "tests" / "expected" / "demo.broken.steps.json", "{ not json");
 
-    const auto results = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto results = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(results.size(), static_cast<std::size_t>(4));
     for (const auto& result : results)
         KAP_ASSERT(!result.passed);
@@ -245,7 +266,7 @@ KAP_TEST("a plugin with no cases yields no results")
 {
     const std::filesystem::path root = scratch_root("nocases");
     write_file(root / "plugins" / "echo" / "plugin.kpl", kEchoPlugin);
-    KAP_ASSERT(kap::plugin::run_tests(kap::plugin::discover(root).front()).empty());
+    KAP_ASSERT(kap::plugin::run_tests(discover_only(root).front()).empty());
     std::filesystem::remove_all(root);
 });
 
@@ -264,14 +285,14 @@ KAP_TEST("a case with no fixture name uses the only fixture, or reports ambiguit
       ]
     })");
 
-    const auto single = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto single = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(single.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(single[0].passed);
 
     // Add a second fixture and the same file becomes ambiguous, which is
     // reported rather than guessed at.
     write_file(dir / "tests" / "fixtures" / "second" / "marker.txt", "x");
-    const auto ambiguous = kap::plugin::run_tests(kap::plugin::discover(root).front());
+    const auto ambiguous = kap::plugin::run_tests(discover_only(root).front());
     KAP_ASSERT_EQ(ambiguous.size(), static_cast<std::size_t>(1));
     KAP_ASSERT(!ambiguous[0].passed);
     KAP_ASSERT(ambiguous[0].detail.find("no fixture named") != std::string::npos);

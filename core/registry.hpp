@@ -60,6 +60,13 @@ struct Entry
     std::string              subdir;   // where in the repository the plugin lives ("" = root)
     std::string              checksum; // "sha256:<64 hex>", optional but enforced when present
     std::vector<std::string> tags;
+
+    // An installer script fetched over HTTPS and run in a staging directory
+    // (see `Origin::Script` and `run_install_script`). Preferred over `url`
+    // when both are present, because it needs only curl or wget rather than a
+    // working git — and because it lets a plugin author decide how their
+    // plugin is assembled without kap having to learn their layout.
+    std::string install_script;
 };
 
 // A named set of plugins, for `kap plugin install --bundle core` (§6.2).
@@ -104,6 +111,8 @@ enum class Origin
 {
     Registry, // resolved through the index
     Git,      // a git URL given directly
+    Script,   // an installer script fetched over HTTPS and run in a staging dir
+    Embedded, // compiled into this binary (a -DKAP_EMBED_PLUGINS=ON build)
     Link,     // `--link`: a symlink to a working copy
     Local,    // copied from a local directory
 };
@@ -196,6 +205,37 @@ std::string git_fetch(const std::string&           url,
                       const std::string&           ref,
                       const std::filesystem::path& destination,
                       bool                         verbose);
+
+// Download `url` to `destination` with curl or wget, whichever is installed.
+// Returns an empty string on success, or the reason it failed.
+//
+// kap has no HTTP client of its own and will not grow one: §9 bans linking a
+// TLS library, and hand-writing one would be a far worse idea than shelling
+// out. curl and wget are runtime tools exactly as git is.
+std::string
+http_fetch(const std::string& url, const std::filesystem::path& destination, bool verbose);
+
+// True when `source` looks like an installer-script URL rather than a git
+// remote or a plugin name.
+bool looks_like_install_script(const std::string& source);
+
+// Run an installer script in `staging` (see docs/plugins.md, "Publishing").
+//
+// The contract — the whole of what a third-party installer needs to know:
+//
+//     cwd               the staging directory
+//     KAP_PLUGIN_DEST   its absolute path; write plugin.kpl here
+//     KAP_PLUGIN_NAME   the name kap was asked for, or empty
+//     KAP_VERSION       the running kap's version
+//
+// The script writes files; it decides nothing. Whatever it leaves behind goes
+// through the same validation, checksum, and confirmation as every other
+// install before a byte reaches the plugin directory — so a script that
+// produces nonsense produces a refused install, not a broken kap.
+std::string run_install_script(const std::filesystem::path& script,
+                               const std::filesystem::path& staging,
+                               const std::string&           plugin_name,
+                               bool                         verbose);
 
 // Validate a candidate plugin directory (§6.3 step 3): plugin.kpl parses, the
 // manifest has the required fields, api_version is supported, and every

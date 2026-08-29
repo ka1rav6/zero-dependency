@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "core/bundled.hpp"
 #include "core/cli.hpp"
 #include "core/completions.hpp"
 #include "core/config.hpp"
@@ -38,6 +39,7 @@
 #include "core/diag.hpp"
 #include "core/exec.hpp"
 #include "core/fs.hpp"
+#include "core/help.hpp"
 #include "core/kapc.hpp"
 #include "core/kpl.hpp"
 #include "core/paths.hpp"
@@ -88,10 +90,20 @@ void print_usage(std::ostream& out)
            "arguments for the underlying tool go after '--':\n"
            "  kap build -- --target install\n"
            "\n"
-           "docs: docs/usage.md, docs/plugins.md, docs/design.md\n";
+           "every command has its own page:\n"
+           "  kap <command> --help          e.g. kap install --help\n"
+           "  kap help                      the full list\n"
+           "\n"
+           "docs: docs/usage.md, docs/configuration.md, docs/plugins.md\n";
 }
 
 std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
+
+// Defined further down, next to the code they belong to. Declared here because
+// the diagnostics and the dispatcher both need them and neither should be
+// moved just to satisfy the compiler's reading order.
+void report_no_plugins_anywhere(const std::filesystem::path& root);
+int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args);
 
 // `detect.ecosystem` from <root>/kap.toml (design doc §3.2 step 4): the pin
 // that settles which plugin owns a directory when several match. Read here
@@ -127,6 +139,11 @@ std::string project_pin(const std::filesystem::path& root)
 // run prints the candidates it considered and any warnings it collected.
 int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
+    if (kap::help::requested(args)) {
+        std::cout << kap::help::page("detect");
+        return 0;
+    }
+
     bool refresh = false;
     for (const std::string& arg : args) {
         if (arg == "--refresh" || arg == "-r") {
@@ -171,8 +188,7 @@ int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::str
                 std::cerr << "\n";
             }
             if (plugins.empty()) {
-                std::cerr << "      note: no plugins are installed; try 'kap plugin install "
-                             "--bundle core'\n";
+                report_no_plugins_anywhere(root);
             } else {
                 std::cerr << "      note: considered:";
                 for (const kap::plugin::Located& located : plugins)
@@ -271,8 +287,21 @@ Session open_session(const kap::cli::GlobalOptions& global)
     session.config      = kap::config::load(session.search_root);
 
     if (global.verbose) {
+        std::cerr << "kap: root: " << session.search_root.string() << "\n";
+        if (session.config.layers.empty()) {
+            std::cerr << "kap: config: none found (" << kap::config::global_file().string() << ", "
+                      << kap::config::project_file(session.search_root).string() << ")\n";
+        }
         for (const kap::config::Layer& layer : session.config.layers)
             std::cerr << "kap: config: " << layer.name << " " << layer.file.string() << "\n";
+        if (session.config.settings.max_walk_up != 0)
+            std::cerr << "kap: config: detect.max_walk_up = " << session.config.settings.max_walk_up
+                      << "\n";
+        if (!session.config.settings.ecosystem.empty())
+            std::cerr << "kap: config: detect.ecosystem = \"" << session.config.settings.ecosystem
+                      << "\"\n";
+        for (const auto& [name, command] : session.config.settings.hooks)
+            std::cerr << "kap: config: hook " << name << " = " << command << "\n";
     }
     for (const std::string& warning : session.config.warnings)
         std::cerr << "kap: warning: " << warning << "\n";
@@ -290,8 +319,76 @@ Session open_session(const kap::cli::GlobalOptions& global)
     options.ast_cache   = kap::kapc::cache_directory();
     options.max_walk_up = session.config.settings.max_walk_up;
     options.pinned      = session.config.settings.ecosystem;
-    session.resolution  = kap::detect::resolve(session.search_root, session.plugins, options);
+    if (global.verbose) {
+        if (session.plugins.empty()) {
+            std::cerr << "kap: plugins: none found\n";
+        } else {
+            for (const kap::plugin::Located& located : session.plugins) {
+                std::cerr << "kap: plugin: " << located.name << "  ["
+                          << kap::plugin::source_name(located.source) << "] "
+                          << located.directory.string() << (located.enabled ? "" : "  (disabled)")
+                          << "\n";
+            }
+        }
+    }
+
+    session.resolution = kap::detect::resolve(session.search_root, session.plugins, options);
+
+    if (global.verbose) {
+        for (const kap::detect::Match& match : session.resolution.matches) {
+            std::cerr << "kap: matched: " << match.name << "  priority=" << match.priority
+                      << " score=" << match.score
+                      << (match.composable ? " (composable)" : " (primary)") << "  markers:";
+            for (const std::string& marker : match.matched_files)
+                std::cerr << ' ' << marker;
+            std::cerr << "\n";
+        }
+        std::cerr << "kap: detect: " << (session.resolution.from_cache ? "cache hit" : "scanned")
+                  << ", root " << session.resolution.root.string() << "\n";
+    }
+
     return session;
+}
+
+// Say where kap looked and what to do about it.
+//
+// "no plugins are installed" reads as a fact about the machine, when the actual
+// situation is usually a fact about the *install*: a `kap` binary copied out of
+// a build tree has no <prefix>/share/kap/plugins beside it, and nothing in the
+// old message hinted at that. Naming every directory that was searched turns
+// a dead end into a diagnosis.
+void report_no_plugins_anywhere(const std::filesystem::path& root)
+{
+    std::cerr << "      note: no plugins found. kap looked in:\n";
+
+    const auto tier = [](const char* label, const std::filesystem::path& path) {
+        if (path.empty()) {
+            std::cerr << "      note:   " << label << ": (no location — $HOME is not set)\n";
+            return;
+        }
+        std::cerr << "      note:   " << label << ": " << path.string()
+                  << (kap::fs::is_dir(path) ? "" : "  (does not exist)") << "\n";
+    };
+
+    tier("project ", root / ".kap" / "plugins");
+    if (const std::string search = kap::paths::env_or_empty("KAP_PLUGIN_PATH"); !search.empty())
+        std::cerr << "      note:   path    : " << search << "\n";
+    tier("user    ", kap::paths::user_plugin_dir());
+    tier("bundled ", kap::paths::bundled_plugin_dir());
+    tier("repo    ", root / "plugins");
+
+    std::cerr << "      note: to fix it, either:\n"
+                 "      note:   kap plugin install --bundle core     install the first-party set\n"
+                 "      note:   kap plugin new <name>                write your own\n";
+    if (!kap::bundled::available()) {
+        // The overwhelmingly common cause, and the one nothing else hints at.
+        std::cerr << "      note: if you copied this binary out of a build tree, its plugins were\n"
+                     "      note: left behind — run 'cmake --install <build> --prefix <prefix>',\n"
+                     "      note: or build with -DKAP_EMBED_PLUGINS=ON for a self-contained kap\n";
+    } else if (!kap::paths::env_or_empty("KAP_NO_EMBEDDED_PLUGINS").empty()) {
+        std::cerr << "      note: this kap has plugins compiled in, but "
+                     "$KAP_NO_EMBEDDED_PLUGINS is set\n";
+    }
 }
 
 // Explain a failed detection well enough to act on. "No plugin matched" alone
@@ -304,8 +401,7 @@ int report_no_match(const Session& session)
     for (const std::string& warning : session.resolution.warnings)
         std::cerr << "      note: " << warning << "\n";
     if (session.plugins.empty()) {
-        std::cerr << "      note: no plugins are installed\n"
-                     "      note: try 'kap plugin install --bundle core'\n";
+        report_no_plugins_anywhere(session.search_root);
     } else {
         std::cerr << "      note: considered:";
         for (const kap::plugin::Located& located : session.plugins)
@@ -370,6 +466,39 @@ std::optional<LoadedPlugin> find_handler(const Session&            session,
     return found;
 }
 
+// Render one resolved configuration value for --verbose.
+//
+// Not a general-purpose formatter: it exists so a person can see at a glance
+// what won the merge, so a list prints as a list and a string prints quoted
+// (which is the difference between an empty string and an unset key).
+std::string render_kpl_value(const kap::kpl::Value& value)
+{
+    using Kind = kap::kpl::Value::Kind;
+    switch (value.kind) {
+        case Kind::String:
+            return "\"" + value.string + "\"";
+        case Kind::Integer:
+            return std::to_string(value.integer);
+        case Kind::Boolean:
+            return value.boolean ? "true" : "false";
+        case Kind::None:
+            return "none";
+        case Kind::List:
+            {
+                std::string out = "[";
+                for (std::size_t index = 0; index < value.list.size(); ++index) {
+                    if (index != 0)
+                        out += ", ";
+                    out += render_kpl_value(value.list[index]);
+                }
+                return out + "]";
+            }
+        case Kind::Record:
+            return "{...}";
+    }
+    return "?";
+}
+
 // Build the exec options every step and hook shares.
 kap::exec::Options executor_options(const kap::cli::GlobalOptions& global,
                                     const std::filesystem::path&   root)
@@ -419,10 +548,34 @@ evaluate_command(const Session&                                session,
         return std::nullopt;
     }
 
+    if (global.verbose) {
+        std::cerr << "kap: using: " << name << " " << loaded.match->located.manifest.string()
+                  << "\n";
+        // The resolved config record is the single most useful thing to see
+        // when a command does something unexpected: it is the merge of four
+        // layers, and no single file shows what actually won.
+        for (const auto& [key, value] : plugin_config.values)
+            std::cerr << "kap: config: " << name << "." << key << " = " << render_kpl_value(value)
+                      << "\n";
+        if (!extra.empty()) {
+            std::cerr << "kap: passthrough:";
+            for (const std::string& argument : extra)
+                std::cerr << ' ' << argument;
+            std::cerr << "\n";
+        }
+    }
+
     try {
         const kap::kpl::Project project =
             kap::kpl::host_project(session.resolution.root.string(), loaded.match->matched_files);
-        return kap::kpl::evaluate(loaded.ast, command, project, plugin_config.values, extra);
+        const kap::kpl::CommandSpec spec =
+            kap::kpl::evaluate(loaded.ast, command, project, plugin_config.values, extra);
+        if (global.verbose) {
+            std::cerr << "kap: spec: " << spec.steps.size() << " step(s)"
+                      << (spec.concurrent ? ", concurrent" : "")
+                      << (spec.report_freed_space ? ", reports freed space" : "") << "\n";
+        }
+        return spec;
     }
     catch (const kap::diag::Error& error) {
         std::cerr << error.report();
@@ -648,6 +801,11 @@ int dispatch_ci(const Session&                  session,
 // `kap <command>` for every command in §8's table.
 int run_project_command(const std::string& command, const kap::cli::Invocation& inv)
 {
+    if (kap::help::requested(inv.argv)) {
+        std::cout << kap::help::page(command);
+        return 0;
+    }
+
     // `kap dev -o` opens the first URL a dev server prints (§ Milestone 10).
     // It is a `dev` option rather than a global flag because it only means
     // anything for a long-running command that prints a URL.
@@ -659,6 +817,25 @@ int run_project_command(const std::string& command, const kap::cli::Invocation& 
             continue;
         }
         remaining.push_back(argument);
+    }
+
+    // `kap install <something>` almost always means "install that plugin".
+    //
+    // `install` is one of §8's project commands, so bare `kap install` installs
+    // the *project*. But the word is overloaded in every other tool a person
+    // has used, and the first thing anyone types is `kap install cmake-cpp`.
+    // That used to be an error whose advice made it worse — it suggested
+    // `kap install -- cmake-cpp`, which is a different wrong thing.
+    //
+    // Since the project command takes no positional arguments at all (tool
+    // arguments go after `--`), `kap install <word>` was previously *always* an
+    // error. Turning an always-error into the obviously-intended action costs
+    // nothing and removes the trap.
+    if (command == "install" && !remaining.empty()) {
+        std::cerr << "kap: note: 'kap install " << remaining.front()
+                  << "' means 'kap plugin install " << remaining.front() << "'\n"
+                  << "      note: bare 'kap install' installs the project itself\n";
+        return run_plugin_install(inv.global, remaining);
     }
 
     if (!remaining.empty()) {
@@ -963,6 +1140,24 @@ int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<
                       << result.directory.string() << "\n";
         } else {
             std::cerr << "kap: error: " << result.message << "\n";
+            // A failed *registry* install is the one case where the user has
+            // several other routes and no reason to know them. Naming those
+            // beats leaving them with a download error and nothing else.
+            if (index && index->find(source) != nullptr) {
+                std::cerr << "      note: '" << source
+                          << "' is a first-party plugin. Other ways to get it:\n"
+                             "      note:   kap plugin install --link path/to/kap/plugins/"
+                          << source
+                          << "\n"
+                             "      note:   cmake --install <build> --prefix ~/.local   "
+                             "(from a kap checkout)\n";
+                if (!kap::bundled::available()) {
+                    std::cerr << "      note:   build kap with -DKAP_EMBED_PLUGINS=ON for a "
+                                 "binary that carries\n"
+                                 "      note:   every first-party plugin and needs no network "
+                                 "at all\n";
+                }
+            }
             ++failures;
         }
     }
@@ -1376,6 +1571,57 @@ int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std
     return failed == 0 ? 0 : 1;
 }
 
+// `kap help [<command>]` — the same pages `kap <command> --help` prints.
+//
+// Worth having as its own command as well as a flag: `kap help plugin install`
+// is how you ask about a subcommand without first working out that the flag
+// goes at the end, and `kap help` alone is a table of contents.
+int run_help(const std::vector<std::string>& args)
+{
+    // `kap help --help` asks about `help` itself. Stripping the flag first is
+    // what makes that work rather than looking for a topic called "--help".
+    const std::vector<std::string> topics_wanted =
+        kap::help::requested(args) && kap::help::without_help_flags(args).empty()
+            ? std::vector<std::string>{"help"}
+            : kap::help::without_help_flags(args);
+
+    if (topics_wanted.empty()) {
+        std::cout << "kap — know project, act.\n\n"
+                     "Every command below has its own page: 'kap <command> --help',\n"
+                     "or 'kap help <command>'.\n\n";
+        for (const kap::help::Topic& topic : kap::help::topics()) {
+            // Subcommand pages are indented under their parent, so the list
+            // reads as a structure rather than a flat pile of names.
+            const bool nested = topic.name.find(' ') != std::string_view::npos;
+            std::cout << (nested ? "    " : "  ") << topic.name;
+            const std::size_t width = topic.name.size() + (nested ? 4 : 2);
+            for (std::size_t pad = width; pad < 26; ++pad)
+                std::cout << ' ';
+            std::cout << topic.summary << "\n";
+        }
+        std::cout << "\nGlobal flags: -n/--dry-run, --root <path>, --set k=v, --verbose\n"
+                     "Docs: docs/usage.md, docs/configuration.md, docs/plugins.md\n";
+        return 0;
+    }
+
+    // Join the words so `kap help plugin install` finds the subcommand page.
+    std::string name;
+    for (const std::string& word : topics_wanted) {
+        if (!name.empty())
+            name += ' ';
+        name += word;
+    }
+
+    const std::string text = kap::help::page(name);
+    if (text.empty()) {
+        std::cerr << "kap: error: no help topic '" << name << "'\n"
+                  << "      note: run 'kap help' for the list\n";
+        return 1;
+    }
+    std::cout << text;
+    return 0;
+}
+
 // `kap completions <shell>` — design doc Milestone 10.
 //
 // The script is generated rather than shipped as a file, because the command
@@ -1419,6 +1665,10 @@ int run_completions(const kap::cli::GlobalOptions& global, const std::vector<std
 // implemented ones.
 int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::string>& argv)
 {
+    if (kap::help::requested(argv) && kap::help::without_help_flags(argv).empty()) {
+        std::cout << kap::help::page("plugin");
+        return 0;
+    }
     if (argv.empty()) {
         std::cerr
             << "usage: kap plugin <subcommand> [options]\n"
@@ -1439,6 +1689,17 @@ int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::str
     }
     const std::string&             subcommand = argv[0];
     const std::vector<std::string> rest(argv.begin() + 1, argv.end());
+
+    // `kap plugin install --help` prints that subcommand's page. Handled once
+    // here rather than in each of the ten handlers, so a new subcommand gets
+    // help for free and cannot be the one that forgot.
+    if (kap::help::requested(rest)) {
+        const std::string text = kap::help::page("plugin " + subcommand);
+        if (!text.empty()) {
+            std::cout << text;
+            return 0;
+        }
+    }
 
     if (subcommand == "doctor")
         return run_plugin_doctor(global, rest);
@@ -1735,6 +1996,12 @@ int run_config_edit(const kap::cli::GlobalOptions& global, std::vector<std::stri
 // one that refuses.
 int run_config(const kap::cli::GlobalOptions& global, const std::vector<std::string>& argv)
 {
+    // One page covers get, set, and edit together: the layering is the thing
+    // that needs explaining, and it is the same explanation for all three.
+    if (kap::help::requested(argv)) {
+        std::cout << kap::help::page("config");
+        return 0;
+    }
     if (argv.empty()) {
         std::cerr << "kap: usage: kap config <get|set|edit> ...\n";
         return 2;
@@ -1788,7 +2055,14 @@ int main(int argc, char** argv)
             return run_plugin(inv.global, inv.argv);
         }
         if (inv.command == "completions") {
+            if (kap::help::requested(inv.argv)) {
+                std::cout << kap::help::page("completions");
+                return 0;
+            }
             return run_completions(inv.global, inv.argv);
+        }
+        if (inv.command == "help") {
+            return run_help(inv.argv);
         }
         if (is_project_command(inv.command)) {
             return run_project_command(inv.command, inv);
@@ -1801,7 +2075,8 @@ int main(int argc, char** argv)
                   << "      note: project commands:";
         for (const std::string& name : project_commands())
             std::cerr << ' ' << name;
-        std::cerr << "\n      note: kap commands: config completions detect plugin\n";
+        std::cerr << "\n      note: kap commands: config completions detect help plugin\n"
+                  << "      note: 'kap help' lists everything, with a page for each\n";
         return 2;
     }
     catch (const kap::diag::Error& e) {

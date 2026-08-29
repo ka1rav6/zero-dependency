@@ -9,6 +9,9 @@
 #include <fstream>
 #include <utility>
 
+#include <unistd.h>
+
+#include "core/bundled.hpp"
 #include "core/detect.hpp"
 #include "core/diag.hpp"
 #include "core/exec.hpp"
@@ -16,6 +19,7 @@
 #include "core/kpl.hpp"
 #include "core/paths.hpp"
 #include "core/sha256.hpp"
+#include "core/version.hpp"
 
 namespace kap
 {
@@ -292,18 +296,23 @@ Index parse_index(const toml::Document& document, const std::filesystem::path& f
             if (table.kind != toml::Value::Kind::Table)
                 continue;
             Entry entry;
-            entry.name        = name;
-            entry.description = string_field(table, "description");
-            entry.version     = string_field(table, "version", "0.0.0");
-            entry.url         = string_field(table, "url");
-            entry.ref         = string_field(table, "ref");
-            entry.subdir      = string_field(table, "subdir");
-            entry.checksum    = string_field(table, "checksum");
-            entry.tags        = string_list_field(table, "tags");
-            if (entry.url.empty()) {
-                throw diag::Error{diag::error("registry entry '" + name + "' has no 'url'",
-                                              diag::Location{file.string()},
-                                              {"every entry needs a git remote to install from"})};
+            entry.name           = name;
+            entry.description    = string_field(table, "description");
+            entry.version        = string_field(table, "version", "0.0.0");
+            entry.url            = string_field(table, "url");
+            entry.ref            = string_field(table, "ref");
+            entry.subdir         = string_field(table, "subdir");
+            entry.checksum       = string_field(table, "checksum");
+            entry.tags           = string_list_field(table, "tags");
+            entry.install_script = string_field(table, "install_script");
+            if (entry.url.empty() && entry.install_script.empty()) {
+                throw diag::Error{
+                    diag::error("registry entry '" + name +
+                                    "' has neither 'url' nor "
+                                    "'install_script'",
+                                diag::Location{file.string()},
+                                {"an entry needs one of: a git remote in 'url', or an "
+                                 "installer script URL in 'install_script'"})};
             }
             index.plugins.emplace(name, std::move(entry));
         }
@@ -351,9 +360,17 @@ std::filesystem::path index_file(const std::filesystem::path& project_root)
 std::optional<Index> load_index(const std::filesystem::path& project_root)
 {
     const std::filesystem::path file = index_file(project_root);
-    if (file.empty() || !fs::is_file(file))
-        return std::nullopt;
-    return parse_index(toml::parse(fs::read_text(file), file.string()), file);
+    if (!file.empty() && fs::is_file(file))
+        return parse_index(toml::parse(fs::read_text(file), file.string()), file);
+
+    // Nothing on disk. A build with plugins compiled in carries the index too,
+    // which is what lets `kap plugin search` and `kap plugin install --bundle`
+    // work on a binary that has never seen a file — the case that used to dead
+    // end with "no registry index found" and no way forward.
+    if (const std::string_view embedded = bundled::registry_index(); !embedded.empty()) {
+        return parse_index(toml::parse(embedded, "<embedded registry>"), "<embedded registry>");
+    }
+    return std::nullopt;
 }
 
 // --- lockfile ------------------------------------------------------------------------------
@@ -365,6 +382,10 @@ const char* origin_name(Origin origin)
             return "registry";
         case Origin::Git:
             return "git";
+        case Origin::Script:
+            return "script";
+        case Origin::Embedded:
+            return "embedded";
         case Origin::Link:
             return "link";
         case Origin::Local:
@@ -380,6 +401,10 @@ Origin origin_from_name(const std::string& name)
 {
     if (name == "git")
         return Origin::Git;
+    if (name == "script")
+        return Origin::Script;
+    if (name == "embedded")
+        return Origin::Embedded;
     if (name == "link")
         return Origin::Link;
     if (name == "local")
@@ -545,6 +570,127 @@ std::string git_fetch(const std::string&           url,
     return {};
 }
 
+// Is `program` on PATH? The same access(X_OK) scan `project.tool()` uses, and
+// for the same reason: it answers the question without running anything.
+bool on_path(const std::string& program)
+{
+    const std::string path = paths::env_or_empty("PATH");
+    if (path.empty())
+        return false;
+    for (const std::filesystem::path& dir : paths::split_path_list(path)) {
+        if (::access((dir / program).c_str(), X_OK) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Is this a URL kap is willing to download from?
+//
+// HTTPS only, with one exception: plain HTTP to loopback. kap *executes* what
+// it downloads from an installer-script URL, and a script fetched over plain
+// HTTP can be replaced by anyone on the path between you and the server.
+// Loopback is exempt because there is no such path — and because forbidding it
+// would leave no way to test this code without a certificate authority.
+std::string url_policy_error(const std::string& url)
+{
+    if (url.starts_with("https://"))
+        return {};
+    if (url.starts_with("http://")) {
+        const std::string rest = url.substr(std::string("http://").size());
+        if (rest.starts_with("127.0.0.1") || rest.starts_with("localhost") ||
+            rest.starts_with("[::1]"))
+            return {};
+        return "refusing to download over plain http: " + url +
+               "\n      note: kap runs what it downloads from an installer URL, and plain "
+               "http can be tampered with in transit"
+               "\n      note: use an https:// address, or install from a local path";
+    }
+    return "not an address kap can download: " + url + "\n      note: expected https://";
+}
+
+std::string
+http_fetch(const std::string& url, const std::filesystem::path& destination, bool verbose)
+{
+    if (const std::string refusal = url_policy_error(url); !refusal.empty())
+        return refusal;
+
+    // Decide which downloader to use *before* running one, rather than trying
+    // curl and falling back when it fails. A fallback chain prints the first
+    // tool's error even when the second succeeds, which is exactly how this
+    // first behaved: an install that worked perfectly still emitted a scary
+    // "Protocol not supported" line from curl.
+    std::vector<std::string> command;
+    if (on_path("curl")) {
+        // --fail is not optional: without it curl writes a 404 page to the
+        // output file and exits 0, and kap goes on to "validate" HTML.
+        command = {"curl", "-fsSL", "-o", destination.string(), url};
+    } else if (on_path("wget")) {
+        command = {"wget", "-q", "-O", destination.string(), url};
+    } else {
+        return "cannot download " + url +
+               ": neither curl nor wget is installed"
+               "\n      note: kap has no HTTP client of its own — design doc §9 permits no "
+               "linked TLS library";
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(destination.parent_path(), ec);
+
+    exec::Options options;
+    options.root    = destination.parent_path();
+    options.verbose = verbose;
+    options.color   = false;
+
+    kpl::CommandSpec spec;
+    kpl::Step        step;
+    step.command = std::move(command);
+    spec.steps.push_back(std::move(step));
+
+    if (!exec::run(spec, options).ok()) {
+        std::filesystem::remove(destination, ec);
+        return "could not download " + url;
+    }
+    return {};
+}
+
+bool looks_like_install_script(const std::string& source)
+{
+    const bool remote = source.starts_with("https://") || source.starts_with("http://");
+    return remote && (source.ends_with(".sh") || source.ends_with("/install"));
+}
+
+std::string run_install_script(const std::filesystem::path& script,
+                               const std::filesystem::path& staging,
+                               const std::string&           plugin_name,
+                               bool                         verbose)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(staging, ec);
+    if (ec)
+        return "cannot create " + staging.string();
+
+    exec::Options options;
+    options.root    = staging;
+    options.verbose = verbose;
+    options.color   = false;
+
+    kpl::CommandSpec spec;
+    kpl::Step        step;
+    // `sh <script>`, not `chmod +x` and execute: the file came off the network
+    // and there is no reason to make it executable on the user's disk.
+    step.command                        = {"/bin/sh", script.string()};
+    step.environment["KAP_PLUGIN_DEST"] = staging.string();
+    step.environment["KAP_PLUGIN_NAME"] = plugin_name;
+    step.environment["KAP_VERSION"]     = kVersionString;
+    spec.steps.push_back(std::move(step));
+
+    const exec::Outcome outcome = exec::run(spec, options);
+    if (!outcome.ok()) {
+        return "the installer script failed with exit status " + std::to_string(outcome.exit_code);
+    }
+    return {};
+}
+
 std::vector<std::string> validate_payload(const std::filesystem::path& directory)
 {
     std::vector<std::string> problems;
@@ -610,6 +756,13 @@ struct Staged
     std::string           ref;
     std::string           subdir;
     std::string           expected_checksum;
+
+    // Set when the payload comes from an installer script that has been
+    // downloaded but not yet run. Running it is deferred until after the user
+    // confirms, because executing a script off the network is the one step
+    // here that declining afterwards cannot undo.
+    std::filesystem::path script;
+    bool                  needs_script_confirmation = false;
 };
 
 Staged stage(const InstallRequest&        request,
@@ -619,14 +772,54 @@ Staged stage(const InstallRequest&        request,
 {
     Staged staged;
 
+    // 0. A first-party plugin compiled into this binary.
+    //
+    // Checked before the registry so `kap plugin install cmake-cpp` works
+    // offline and instantly on an embedded build. It is also the honest order:
+    // the embedded copy *is* what this binary ships, so fetching possibly
+    // different text over the network would be the surprising choice.
+    if (!request.link) {
+        if (const bundled::Plugin* embedded = bundled::find(request.source); embedded != nullptr) {
+            staged.origin = Origin::Embedded;
+            staged.url    = "compiled into kap " + std::string(kVersionString);
+            if (const std::string error = bundled::materialize(*embedded, staging);
+                !error.empty()) {
+                staged.error = error;
+                return staged;
+            }
+            staged.directory = staging;
+            staged.ok        = true;
+            return staged;
+        }
+    }
+
     // 1. A registry name.
     if (index && index->find(request.source) != nullptr && !request.link) {
         const Entry& entry       = *index->find(request.source);
         staged.origin            = Origin::Registry;
-        staged.url               = entry.url;
         staged.ref               = entry.ref;
         staged.subdir            = entry.subdir;
         staged.expected_checksum = entry.checksum;
+
+        // An installer script is preferred over a git remote when the entry
+        // offers both: it needs only curl or wget, where the git path needs a
+        // working git *and* a clone of the whole repository.
+        if (!entry.install_script.empty()) {
+            staged.url                         = entry.install_script;
+            const std::filesystem::path script = staging.string() + ".install.sh";
+            if (const std::string error = http_fetch(entry.install_script, script, verbose);
+                !error.empty()) {
+                staged.error = error;
+                return staged;
+            }
+            staged.script                    = script;
+            staged.needs_script_confirmation = true;
+            staged.directory                 = staging;
+            staged.ok                        = true;
+            return staged;
+        }
+
+        staged.url = entry.url;
         if (const std::string error = git_fetch(entry.url, entry.ref, staging, verbose);
             !error.empty()) {
             staged.error = error;
@@ -637,7 +830,24 @@ Staged stage(const InstallRequest&        request,
         return staged;
     }
 
-    // 2. A git URL.
+    // 2. An installer-script URL, given directly:
+    //        kap plugin install https://example.com/kap-zig/install.sh
+    if (looks_like_install_script(request.source)) {
+        staged.origin                      = Origin::Script;
+        staged.url                         = request.source;
+        const std::filesystem::path script = staging.string() + ".install.sh";
+        if (const std::string error = http_fetch(request.source, script, verbose); !error.empty()) {
+            staged.error = error;
+            return staged;
+        }
+        staged.script                    = script;
+        staged.needs_script_confirmation = true;
+        staged.directory                 = staging;
+        staged.ok                        = true;
+        return staged;
+    }
+
+    // 3. A git URL.
     if (looks_like_git_url(request.source)) {
         staged.origin = Origin::Git;
         staged.url    = request.source;
@@ -651,7 +861,7 @@ Staged stage(const InstallRequest&        request,
         return staged;
     }
 
-    // 3. A local path.
+    // 4. A local path.
     std::filesystem::path local(request.source);
     if (local.is_relative())
         local = request.project_root / local;
@@ -681,25 +891,77 @@ InstallResult install(const InstallRequest&                          request,
 
     // The staging area is scratch space; leaving it behind after any exit path
     // would slowly fill ~/.cache with abandoned clones.
+    //
+    // A downloaded installer script is treated differently on purpose: it is
+    // removed when the install *succeeded*, and kept when it did not. When
+    // something goes wrong with a script off the network, the script is the
+    // first thing anyone will want to look at, and its path is already in the
+    // message kap printed.
     struct Cleanup
     {
-        std::filesystem::path path;
-        bool                  keep = false;
+        std::filesystem::path staging;
+        std::filesystem::path script;
+        bool                  succeeded = false;
 
         ~Cleanup()
         {
-            if (!keep) {
-                std::error_code ec;
-                std::filesystem::remove_all(path, ec);
-            }
+            std::error_code ec;
+            std::filesystem::remove_all(staging, ec);
+            if (succeeded && !script.empty())
+                std::filesystem::remove(script, ec);
         }
-    } cleanup{staging, false};
+    } cleanup{staging, {}, false};
 
     // --- §6.3 steps 1-2: resolve the source and fetch the payload.
     const Staged staged = stage(request, index, staging, verbose);
+    cleanup.script      = staged.script;
     if (!staged.ok) {
         result.message = staged.error;
         return result;
+    }
+
+    // --- An installer script is confirmed BEFORE it runs.
+    //
+    // Every other source is inert until kap decides to install it, so the
+    // ordinary confirmation below — which happens after validation, when kap
+    // can describe exactly what it found — is the right place to ask. A script
+    // is not inert: running it *is* the irreversible step, and asking
+    // afterwards would be asking about something that already happened.
+    //
+    // The digest is shown because it is the only thing a user can act on: the
+    // script is on disk at a path they can read before answering.
+    if (staged.needs_script_confirmation) {
+        std::string digest = "(could not be read)";
+        std::string size   = "?";
+        try {
+            const std::string text = fs::read_text(staged.script);
+            digest                 = sha256::hex(text);
+            size                   = std::to_string(text.size()) + " bytes";
+        }
+        catch (const diag::Error&) {
+        }
+
+        const std::string summary =
+            "run an installer script from the network\n"
+            "  url:      " +
+            staged.url + "\n" + "  size:     " + size + "\n" + "  sha256:   " + digest + "\n" +
+            "  saved at: " + staged.script.string() + "\n" +
+            "\n"
+            "  This script runs as you, with your permissions. Read it before saying\n"
+            "  yes if you did not write it. kap will still validate whatever it\n"
+            "  produces before installing anything.\n";
+
+        if (!confirm(summary)) {
+            result.message = "cancelled";
+            return result;
+        }
+
+        if (const std::string error =
+                run_install_script(staged.script, staging, request.source, verbose);
+            !error.empty()) {
+            result.message = error;
+            return result;
+        }
     }
 
     // --- §6.3 step 3: validate before anything is written anywhere.
@@ -765,10 +1027,14 @@ InstallResult install(const InstallRequest&                          request,
         summary += "  mode:        symlink (edits to the source take effect immediately)\n";
     if (!staged.expected_checksum.empty())
         summary += "  checksum:    verified\n";
+    else if (staged.origin == Origin::Embedded)
+        summary += "  checksum:    not needed — this payload came out of the binary\n";
     else
         summary += "  checksum:    none in the registry — kap cannot verify this payload\n";
 
-    if (!confirm(summary)) {
+    // A script install has already been confirmed, at the only moment where
+    // saying no could still prevent anything: before the script ran.
+    if (!staged.needs_script_confirmation && !confirm(summary)) {
         result.message = "cancelled";
         return result;
     }
@@ -831,11 +1097,12 @@ InstallResult install(const InstallRequest&                          request,
     if (!request.project_root.empty())
         detect::invalidate_cache(request.project_root);
 
-    result.installed = true;
-    result.name      = name;
-    result.version   = version;
-    result.origin    = staged.origin;
-    result.directory = destination;
+    cleanup.succeeded = true;
+    result.installed  = true;
+    result.name       = name;
+    result.version    = version;
+    result.origin     = staged.origin;
+    result.directory  = destination;
     return result;
 }
 

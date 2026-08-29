@@ -56,7 +56,17 @@ Invocation parse(const std::vector<std::string>& args)
             continue;
         }
         if (arg == "-h" || arg == "--help") {
-            inv.global.help = true;
+            // Before a command word, `-h` asks for kap's own usage. After one,
+            // it asks about *that command*, so it is forwarded like any other
+            // command-local option and the subcommand prints its own page.
+            //
+            // This is the fix for `kap install -h` printing the global banner —
+            // the one place someone is already confused, answered with a page
+            // that says nothing about what they asked.
+            if (inv.command.empty())
+                inv.global.help = true;
+            else
+                inv.argv.push_back(arg);
             continue;
         }
         if (arg == "-V" || arg == "--version") {

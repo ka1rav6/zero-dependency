@@ -252,14 +252,51 @@ KAP_TEST("parse failures name the offending option")
     }
 });
 
-KAP_TEST("--help and --version are recorded independently of any command")
+KAP_TEST("--help before a command asks for kap's own usage")
 {
-    const kap::cli::Invocation inv = kap::cli::parse({"build", "--help"});
+    const kap::cli::Invocation inv = kap::cli::parse({"--help"});
     KAP_ASSERT(inv.global.help);
-    KAP_ASSERT_EQ(inv.command, "build");
+    KAP_ASSERT(inv.command.empty());
 
     const kap::cli::Invocation v = kap::cli::parse({"-V"});
     KAP_ASSERT(v.global.version);
+});
+
+KAP_TEST("--help after a command asks about that command")
+{
+    // `kap install -h` used to set the *global* help flag and print kap's
+    // banner — the one place someone is already confused, answered with a page
+    // that says nothing about what they asked. It is now forwarded like any
+    // other command-local option, and the subcommand prints its own page.
+    for (const char* flag : {"-h", "--help"}) {
+        const kap::cli::Invocation inv = kap::cli::parse({"install", flag});
+        KAP_ASSERT(!inv.global.help);
+        KAP_ASSERT_EQ(inv.command, std::string("install"));
+        KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(1));
+        KAP_ASSERT_EQ(inv.argv.front(), std::string(flag));
+    }
+});
+
+KAP_TEST("--help reaches a subcommand's own arguments")
+{
+    // `plugin` is the command; `install --help` is what it receives, so the
+    // plugin dispatcher can print the page for that specific subcommand.
+    const kap::cli::Invocation inv = kap::cli::parse({"plugin", "install", "--help"});
+    KAP_ASSERT(!inv.global.help);
+    KAP_ASSERT_EQ(inv.command, std::string("plugin"));
+    KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(inv.argv[0], std::string("install"));
+    KAP_ASSERT_EQ(inv.argv[1], std::string("--help"));
+});
+
+KAP_TEST("--help after `--` is passthrough, not a request for help")
+{
+    // `kap test -- --help` asks the *test runner* for its help.
+    const kap::cli::Invocation inv = kap::cli::parse({"test", "--", "--help"});
+    KAP_ASSERT(!inv.global.help);
+    KAP_ASSERT(inv.argv.empty());
+    KAP_ASSERT_EQ(inv.passthrough.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(inv.passthrough.front(), std::string("--help"));
 });
 
 // --- command-local options (Milestone 4) ------------------------------------------

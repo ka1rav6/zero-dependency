@@ -32,6 +32,7 @@ REPO="${KAP_REPO:-https://github.com/kap-project/kap}"
 REF="${KAP_REF:-main}"
 PREFIX="${KAP_PREFIX:-$HOME/.local}"
 BUILD_TYPE="${KAP_BUILD_TYPE:-Release}"
+EMBED="${KAP_EMBED:-0}"
 
 say()  { printf 'kap-install: %s\n' "$1"; }
 die()  { printf 'kap-install: error: %s\n' "$1" >&2; exit 1; }
@@ -39,15 +40,33 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
     cat <<'USAGE'
-usage: install.sh [--prefix DIR] [--ref REF] [--repo URL] [--help]
+usage: install.sh [--prefix DIR] [--ref REF] [--repo URL] [--embed] [--help]
 
   --prefix DIR   where to install (default: ~/.local, or $KAP_PREFIX)
   --ref REF      branch, tag, or commit to build (default: main)
   --repo URL     repository to clone (default: the kap project)
+  --embed        compile the first-party plugins INTO the binary
 
-Environment variables KAP_PREFIX, KAP_REF, KAP_REPO, and KAP_BUILD_TYPE do the
-same thing, which is what makes this usable from a `curl | sh` pipeline where
-there is nowhere to put a flag.
+Environment variables KAP_PREFIX, KAP_REF, KAP_REPO, KAP_BUILD_TYPE, and
+KAP_EMBED do the same thing, which is what makes this usable from a `curl | sh`
+pipeline where there is nowhere to put a flag:
+
+    curl -fsSL .../install.sh | KAP_EMBED=1 sh
+
+## --embed, and when you want it
+
+Without it, the plugins are installed as text files next to the binary, under
+<prefix>/share/kap/plugins. That is the ordinary packaging story, and it is what
+a distributor wants: the plugins are files a maintainer can see, diff, and
+patch.
+
+With it, the same plugins are compiled into the binary. `kap` becomes one
+self-contained file that works with nothing beside it and no network at all —
+which is what you want if you are going to copy that file to a server, into a
+container, or onto a machine you do not administer.
+
+The failure mode --embed removes is a real one: a `kap` binary lifted out of a
+build tree finds no plugins, no registry, and no obvious way to get either.
 USAGE
 }
 
@@ -59,6 +78,8 @@ while [ $# -gt 0 ]; do
         --ref=*)  REF="${1#--ref=}"; shift ;;
         --repo)   [ $# -ge 2 ] || die "--repo needs a URL";        REPO="$2"; shift 2 ;;
         --repo=*) REPO="${1#--repo=}"; shift ;;
+        --embed) EMBED=1; shift ;;
+        --no-embed) EMBED=0; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option '$1' (try --help)" ;;
     esac
@@ -78,6 +99,11 @@ fi
 
 say "repository: $REPO ($REF)"
 say "prefix:     $PREFIX"
+if [ "$EMBED" = "1" ]; then
+    say "plugins:    compiled into the binary (--embed)"
+else
+    say "plugins:    installed as files under $PREFIX/share/kap/plugins"
+fi
 
 # --- 2. Clone into a scratch directory that always gets cleaned up -------------
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/kap-install.XXXXXX")"
@@ -103,10 +129,14 @@ fi
 generator=""
 have ninja && generator="-G Ninja"
 
+embed_flag="-DKAP_EMBED_PLUGINS=OFF"
+[ "$EMBED" = "1" ] && embed_flag="-DKAP_EMBED_PLUGINS=ON"
+
 say "building ($BUILD_TYPE)..."
 # shellcheck disable=SC2086  # $generator is deliberately word-split or empty
 cmake -S "$workdir/kap" -B "$workdir/build" $generator \
       -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+      "$embed_flag" \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" >/dev/null \
     || die "cmake configure failed"
 cmake --build "$workdir/build" >/dev/null || die "build failed"
@@ -151,8 +181,11 @@ Next:
     kap build                      build it
     kap build -n                   ...or just show what that would run
 
-    kap plugin list                the bundled plugins ($("$installed" plugin list | wc -l | tr -d ' ') installed)
+    kap plugin list                the bundled plugins ($("$installed" plugin list | wc -l | tr -d ' ') available)
     kap plugin new my-ecosystem    write your own
+
+    kap help                       every command, with a page for each
+    kap <command> --help           e.g. kap install --help
 
     kap completions bash > ~/.local/share/bash-completion/completions/kap
 

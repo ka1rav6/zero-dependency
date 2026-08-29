@@ -78,12 +78,71 @@ rm -f /tmp/kap-ci-completion.bash
 ./build/kap completions zsh >/dev/null
 ./build/kap completions fish >/dev/null
 
-echo "== install script ================================================="
-# Only a syntax check here: actually running it clones and rebuilds, which the
-# rest of this script has already done. `sh -n` still catches the class of
-# mistake that matters most for a script people pipe into a shell.
+echo "== embedded build ================================================="
+# The -DKAP_EMBED_PLUGINS=ON variant is a supported way to install kap, so it
+# has to keep building and keep passing its own tests. It is also the only
+# configuration where core/bundled.cpp's materialize path runs at all.
+cmake -S . -B build-embed -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_WERROR=ON \
+      -DKAP_EMBED_PLUGINS=ON >/dev/null
+cmake --build build-embed >/dev/null
+ctest --test-dir build-embed --output-on-failure >/dev/null
+
+# The property that makes the embedded build worth having: a bare machine, no
+# plugin directory anywhere, no network — and kap still works. This is the exact
+# situation that used to dead end with "no plugins are installed" and advice
+# that could not be followed.
+embed_home="$(mktemp -d)"
+embed_proj="$(mktemp -d)"
+printf 'cmake_minimum_required(VERSION 3.16)\n' > "$embed_proj/CMakeLists.txt"
+embedded_plugins="$(env -i HOME="$embed_home" PATH="$PATH" \
+    "$repo_root/build-embed/kap" plugin list --root "$embed_proj" | wc -l | tr -d " ")"
+if [ "$embedded_plugins" -lt 8 ]; then
+    echo "ci.sh: an embedded kap found only $embedded_plugins plugins" >&2
+    exit 1
+fi
+env -i HOME="$embed_home" PATH="$PATH" \
+    "$repo_root/build-embed/kap" build -n --root "$embed_proj" >/dev/null
+echo "ci.sh: an embedded kap builds a project on a bare machine ($embedded_plugins plugins)"
+rm -rf "$embed_home" "$embed_proj"
+
+echo "== help ==========================================================="
+# Every command must have a page. A command with no help is a command nobody
+# can learn without reading the source.
+for command in build check ci clean dev doctor fmt install lint ports run test \
+               detect config plugin completions help; do
+    ./build/kap "$command" --help >/dev/null
+done
+./build/kap help >/dev/null
+for subcommand in list search install remove update enable disable pin new doctor test; do
+    ./build/kap plugin "$subcommand" --help >/dev/null
+done
+
+echo "== scripts ========================================================"
+# Only syntax checks here: actually running install.sh clones and rebuilds,
+# which the rest of this script has already done. `sh -n` still catches the
+# class of mistake that matters most for a script people pipe into a shell.
 sh -n scripts/install.sh
+sh -n scripts/install-plugin.sh
 bash -n scripts/ci-full.sh
+
+# install-plugin.sh carries its own list of the first-party plugins, and a
+# plugin added to the tree without being added there is one nobody can install.
+script_plugins="$(sh scripts/install-plugin.sh --list | sort | tr "\n" " ")"
+tree_plugins="$(ls -1 plugins | sort | tr "\n" " ")"
+if [ "$script_plugins" != "$tree_plugins" ]; then
+    echo "ci.sh: scripts/install-plugin.sh lists '$script_plugins'" >&2
+    echo "ci.sh: but plugins/ contains  '$tree_plugins'" >&2
+    exit 1
+fi
+
+# ...and the same for the registry index, for the same reason.
+for plugin in $tree_plugins; do
+    if ! grep -q "^\[plugins\.$plugin\]" registry/index.toml; then
+        echo "ci.sh: registry/index.toml has no entry for '$plugin'" >&2
+        exit 1
+    fi
+done
+echo "ci.sh: plugins/, install-plugin.sh, and registry/index.toml agree"
 
 echo "== smoke tests ===================================================="
 # Milestone-0 contract: version banner, help, and a loud failure for any

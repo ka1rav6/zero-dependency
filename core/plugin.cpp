@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "core/bundled.hpp"
 #include "core/diag.hpp"
 #include "core/fs.hpp"
 #include "core/json.hpp"
@@ -233,6 +234,8 @@ const char* source_name(Source source)
             return "bundled";
         case Source::Repository:
             return "repo";
+        case Source::Embedded:
+            return "embedded";
     }
     return "unknown";
 }
@@ -290,9 +293,23 @@ std::vector<Located> discover(const DiscoveryOptions& options)
     if (options.include_bundled)
         collect_from(paths::bundled_plugin_dir(), Source::Bundled, found);
 
-    // Last, so anything installed shadows the in-repo copy of the same plugin.
+    // Then the repository's own plugins, so anything *installed* shadows the
+    // in-repo copy of the same plugin.
     if (options.include_repository && !options.project_root.empty())
         collect_from(options.project_root / "plugins", Source::Repository, found);
+
+    // Compiled-in plugins last of all. An embedded plugin is a snapshot taken
+    // when the binary was compiled, which makes it the weakest claim there is:
+    // a distributor's patched copy should win, and so should the plugin a
+    // developer has open in their checkout.
+    //
+    // $KAP_NO_EMBEDDED_PLUGINS turns them off. Worth having as an escape hatch
+    // rather than only as a build option: on an embedded binary every directory
+    // has a plugin, which is exactly what makes "why is kap using a plugin I
+    // never installed?" hard to answer. Setting it reproduces the behaviour of
+    // a build without embedding, so the two can be compared directly.
+    if (options.include_embedded && paths::env_or_empty("KAP_NO_EMBEDDED_PLUGINS").empty())
+        collect_from(bundled::ensure_materialized(), Source::Embedded, found);
 
     // collect_from preserves tier order, not name order; sort so every caller
     // (and every test) sees a deterministic list.

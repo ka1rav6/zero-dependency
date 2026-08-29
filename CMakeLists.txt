@@ -90,6 +90,53 @@ if(KAP_SANITIZE)
     endif()
 endif()
 
+# --- Embedded plugins ----------------------------------------------------------
+# KAP_EMBED_PLUGINS=ON compiles the first-party plugins and the registry index
+# into the binary, producing a single self-contained file that needs nothing on
+# disk and no network.
+#
+# Off by default, because the ordinary packaging story is better for
+# distributors: `cmake --install` writes the plugins to
+# <prefix>/share/kap/plugins as text files that can be seen, diffed, and
+# patched. On is right for a binary someone will copy around, which is the case
+# the default handles worst — a `kap` lifted out of a build tree finds no
+# plugins, no registry, and no way to get either.
+#
+#     cmake -S . -B build -DKAP_EMBED_PLUGINS=ON
+#     scripts/install.sh --embed
+option(KAP_EMBED_PLUGINS "Compile the first-party plugins into the binary" OFF)
+
+# The generated source is compiled either way; KAP_EMBED_PLUGINS only decides
+# whether it carries the plugins as well as the index.
+set(KAP_EMBEDDED_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/bundled_data.cpp")
+
+if(KAP_EMBED_PLUGINS)
+    set(KAP_EMBED_PLUGINS_COMMENT " and the first-party plugins")
+else()
+    set(KAP_EMBED_PLUGINS_COMMENT "")
+endif()
+
+file(GLOB_RECURSE KAP_PLUGIN_SOURCES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*/plugin.kpl"
+     "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*/README.md")
+
+# A custom command rather than a configure-time execute_process, so editing a
+# plugin.kpl or the index regenerates on the next build instead of needing a
+# manual reconfigure. DEPENDS lists every input the generator reads.
+add_custom_command(
+    OUTPUT "${KAP_EMBEDDED_SOURCE}"
+    COMMAND ${CMAKE_COMMAND}
+            -DPLUGIN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/plugins
+            -DREGISTRY_FILE=${CMAKE_CURRENT_SOURCE_DIR}/registry/index.toml
+            -DEMBED_PLUGINS=${KAP_EMBED_PLUGINS}
+            -DOUTPUT=${KAP_EMBEDDED_SOURCE}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_plugins.cmake"
+    DEPENDS ${KAP_PLUGIN_SOURCES}
+            "${CMAKE_CURRENT_SOURCE_DIR}/registry/index.toml"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_plugins.cmake"
+    COMMENT "Embedding the registry index${KAP_EMBED_PLUGINS_COMMENT}"
+    VERBATIM)
+
 # --- kap_core library ---------------------------------------------------------
 # Shared infrastructure (design doc Milestone 1): TOML parsing + CLI parsing
 # live here as real TUs so the binary and the tests link the same code; the
@@ -105,8 +152,11 @@ add_library(kap_core STATIC
     core/config.cpp
     core/registry.cpp
     core/completions.cpp
+    core/help.cpp
     core/plugin.cpp
     core/detect.cpp
+    core/bundled.cpp
+    ${KAP_EMBEDDED_SOURCE}
 )
 # Let `#include "core/..."` resolve from the repository root for consumers.
 target_include_directories(kap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -169,6 +219,8 @@ add_executable(
     tests/test_sha256.cpp
     tests/test_registry.cpp
     tests/test_completions.cpp
+    tests/test_help.cpp
+    tests/test_bundled.cpp
     tests/test_version.cpp
 )
 target_link_libraries(kap_tests PRIVATE kap_core)
