@@ -19,10 +19,12 @@
 // does something surprising, that function is the whole explanation.
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <istream>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -39,6 +41,7 @@
 #include "core/kpl.hpp"
 #include "core/paths.hpp"
 #include "core/plugin.hpp"
+#include "core/registry.hpp"
 #include "core/toml.hpp"
 #include "core/version.hpp"
 
@@ -240,9 +243,14 @@ Session open_session(const kap::cli::GlobalOptions& global)
     for (const std::string& warning : session.config.warnings)
         std::cerr << "kap: warning: " << warning << "\n";
 
+    // Discovery finds every plugin on disk; the lockfile is what remembers
+    // which of them the user switched off (§6.1). Applying it here is what
+    // makes `kap plugin disable` actually change what `kap build` does.
     kap::plugin::DiscoveryOptions discovery;
     discovery.project_root = session.search_root;
     session.plugins        = kap::plugin::discover(discovery);
+    kap::registry::apply_lockfile(kap::registry::load_lockfile(kap::paths::lockfile()),
+                                  session.plugins);
 
     kap::detect::Options options;
     options.ast_cache   = kap::kapc::cache_directory();
@@ -539,80 +547,642 @@ int run_project_command(const std::string& command, const kap::cli::Invocation& 
     return dispatch_one(session, command, inv.global, inv.passthrough);
 }
 
-// `kap plugin doctor` — parse, manifest-validate, and type-check every bundled
-// plugin (design doc §6.1). This is the gate that keeps a plugin which cannot
-// possibly run from being reported as healthy, so it checks all three: a
-// plugin whose manifest is fine but whose `build` command references an
-// undeclared config key is broken, and saying "[PASS]" about it would be a lie.
-int run_plugin_doctor(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+// --- the plugin manager CLI (design doc §6.1, Milestone 7) ---------------------------
+
+// The lockfile for this machine (§6.4).
+kap::registry::Lockfile open_lockfile()
+{
+    return kap::registry::load_lockfile(kap::paths::lockfile());
+}
+
+// Discovery with the lockfile's enable/disable state already applied, so every
+// caller sees one list that knows what is switched off.
+std::vector<kap::plugin::Located> discover_with_lockfile(const std::filesystem::path&   root,
+                                                         const kap::registry::Lockfile& lock)
+{
+    kap::plugin::DiscoveryOptions options;
+    options.project_root                    = root;
+    std::vector<kap::plugin::Located> found = kap::plugin::discover(options);
+    kap::registry::apply_lockfile(lock, found);
+    return found;
+}
+
+// Ask the user to confirm, as §7 requires ("prints a summary and requires
+// confirmation unless --yes").
+//
+// A non-interactive stdin — a CI job, a pipeline — is treated as "no" rather
+// than "yes". Installing third-party code because nobody was there to object
+// is exactly the failure mode the prompt exists to prevent; a script that
+// means it passes --yes.
+bool confirm_install(const std::string& summary)
+{
+    std::cout << summary << "\nProceed? [y/N] " << std::flush;
+    std::string answer;
+    if (!std::getline(std::cin, answer)) {
+        std::cout << "\n";
+        std::cerr << "kap: error: cannot ask for confirmation (stdin is not interactive)\n"
+                     "      note: pass --yes to install without confirming\n";
+        return false;
+    }
+    return answer == "y" || answer == "Y" || answer == "yes";
+}
+
+// `kap plugin list` — §6.1.
+int run_plugin_list(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
     if (!args.empty()) {
-        std::cerr << "kap: usage: kap plugin doctor\n";
+        std::cerr << "kap: usage: kap plugin list\n";
         return 2;
     }
-    const std::filesystem::path             root     = search_root(global);
-    const std::vector<kap::plugin::Located> plugins  = kap::plugin::discover(root);
-    int                                     failures = 0;
+    const std::filesystem::path             root  = search_root(global);
+    const kap::registry::Lockfile           lock  = open_lockfile();
+    const std::vector<kap::plugin::Located> found = discover_with_lockfile(root, lock);
 
-    for (const kap::plugin::Located& located : plugins) {
-        try {
-            const kap::kpl::Plugin plugin =
-                kap::kpl::parse(kap::fs::read_text(located.manifest), located.manifest.string());
+    if (found.empty()) {
+        std::cout << "no plugins installed\n"
+                     "  try 'kap plugin install --bundle core', or 'kap plugin new <name>' to "
+                     "write one\n";
+        return 0;
+    }
 
-            std::vector<std::string>       errors      = kap::kpl::validate(plugin);
-            const std::vector<std::string> type_errors = kap::kpl::type_check(plugin);
-            errors.insert(errors.end(), type_errors.begin(), type_errors.end());
+    for (const kap::plugin::Located& located : found) {
+        const auto        row     = lock.plugins.find(located.name);
+        const std::string version = row != lock.plugins.end()
+                                        ? row->second.version
+                                        : kap::registry::declared_version(located.directory);
+        const std::string origin =
+            row != lock.plugins.end() ? kap::registry::origin_name(row->second.origin) : "local";
 
-            if (errors.empty()) {
-                std::cout << "[PASS] " << located.name << "\n";
-                continue;
+        std::cout << (located.enabled ? "  " : "! ") << located.name << "  " << version << "  ["
+                  << kap::plugin::source_name(located.source) << "/" << origin << "]";
+        if (!located.enabled)
+            std::cout << "  disabled";
+        if (row != lock.plugins.end() && !row->second.pinned.empty())
+            std::cout << "  pinned=" << row->second.pinned;
+        std::cout << "\n";
+        if (global.verbose)
+            std::cout << "      " << located.directory.string() << "\n";
+    }
+    return 0;
+}
+
+// `kap plugin search <query>` — §6.1. Matches the name, description, and tags,
+// because a user looking for "rust" should find `cargo-rust` whichever of the
+// three the word happens to be in.
+int run_plugin_search(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    if (args.size() != 1) {
+        std::cerr << "kap: usage: kap plugin search <query>\n";
+        return 2;
+    }
+    const std::filesystem::path root = search_root(global);
+
+    std::optional<kap::registry::Index> index;
+    try {
+        index = kap::registry::load_index(root);
+    }
+    catch (const kap::diag::Error& error) {
+        std::cerr << error.report();
+        return 1;
+    }
+    if (!index) {
+        std::cerr << "kap: error: no registry index found\n"
+                     "      note: looked for $KAP_REGISTRY, "
+                  << (kap::paths::registry_dir().empty()
+                          ? std::string("~/.local/share/kap/registry/index.toml")
+                          : (kap::paths::registry_dir() / "index.toml").string())
+                  << ",\n      note: and " << (root / "registry" / "index.toml").string() << "\n";
+        return 1;
+    }
+
+    // Lower-cased substring matching. Not fuzzy: a registry is small, and a
+    // search that returns things the user did not ask for is worse than one
+    // that returns nothing and lets them try a shorter word.
+    std::string needle = args[0];
+    std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    const auto contains_needle = [&needle](std::string haystack) {
+        std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return haystack.find(needle) != std::string::npos;
+    };
+
+    int matches = 0;
+    for (const auto& [name, entry] : index->plugins) {
+        bool matched = contains_needle(name) || contains_needle(entry.description);
+        for (const std::string& tag : entry.tags)
+            matched = matched || contains_needle(tag);
+        if (!matched)
+            continue;
+        ++matches;
+        std::cout << "  " << name << "  " << entry.version << "\n";
+        if (!entry.description.empty())
+            std::cout << "      " << entry.description << "\n";
+    }
+
+    if (matches == 0) {
+        std::cout << "no plugin in " << index->file.string() << " matches '" << args[0] << "'\n";
+        return 1;
+    }
+    return 0;
+}
+
+// `kap plugin install <name|git-url|path>` — §6.1 and §6.3.
+int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    kap::registry::InstallRequest request;
+    request.project_root = search_root(global);
+
+    std::string              bundle;
+    std::vector<std::string> sources;
+
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        const std::string& arg = args[index];
+        if (arg == "--yes" || arg == "-y") {
+            request.assume_yes = true;
+        } else if (arg == "--link") {
+            request.link = true;
+        } else if (arg == "--force") {
+            request.force = true;
+        } else if (arg == "--project") {
+            request.project_local = true;
+        } else if (arg == "--global") {
+            request.project_local = false;
+        } else if (arg == "--bundle") {
+            if (index + 1 >= args.size()) {
+                std::cerr << "kap: error: --bundle requires a bundle name\n";
+                return 2;
             }
-            ++failures;
-            std::cerr << "kap: error: " << located.manifest.string() << ":\n";
-            for (const std::string& error : errors)
-                std::cerr << "  " << error << "\n";
-        }
-        catch (const kap::diag::Error& error) {
-            ++failures;
-            std::cerr << error.report();
+            bundle = args[++index];
+        } else if (arg.starts_with("--bundle=")) {
+            bundle = arg.substr(std::string("--bundle=").size());
+        } else if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << "kap: error: unknown option '" << arg << "' for 'kap plugin install'\n"
+                      << "      note: expected --yes, --link, --force, --project, --bundle\n";
+            return 2;
+        } else {
+            sources.push_back(arg);
         }
     }
 
-    if (plugins.empty()) {
-        std::cerr << "kap: error: no plugin.kpl files found in " << (root / "plugins").string()
-                  << "\n";
+    std::optional<kap::registry::Index> index;
+    try {
+        index = kap::registry::load_index(request.project_root);
+    }
+    catch (const kap::diag::Error& error) {
+        std::cerr << error.report();
         return 1;
+    }
+
+    if (!bundle.empty()) {
+        if (!sources.empty()) {
+            std::cerr << "kap: error: --bundle installs a named set; do not also name plugins\n";
+            return 2;
+        }
+        if (!index) {
+            std::cerr << "kap: error: --bundle needs a registry index, and none was found\n";
+            return 1;
+        }
+        const kap::registry::Bundle* found = index->find_bundle(bundle);
+        if (found == nullptr) {
+            std::cerr << "kap: error: no bundle named '" << bundle << "'\n";
+            if (!index->bundles.empty()) {
+                std::cerr << "      note: available:";
+                for (const auto& [name, unused] : index->bundles) {
+                    (void) unused;
+                    std::cerr << ' ' << name;
+                }
+                std::cerr << "\n";
+            }
+            return 1;
+        }
+        sources = found->plugins;
+    }
+
+    if (sources.empty()) {
+        std::cerr << "kap: usage: kap plugin install [--yes] [--link] [--project] "
+                     "<name|git-url|path>\n"
+                     "      note:  kap plugin install --bundle <name>\n";
+        return 2;
+    }
+
+    kap::registry::Lockfile lock = open_lockfile();
+
+    // A bundle installs several plugins and one failure should not abandon the
+    // rest — the user asked for a set, and getting five of six with a clear
+    // report beats getting two and an abort.
+    int failures = 0;
+    for (const std::string& source : sources) {
+        kap::registry::InstallRequest one = request;
+        one.source                        = source;
+
+        if (global.dry_run) {
+            std::cout << "would install '" << source << "' into "
+                      << (one.project_local ? (one.project_root / ".kap" / "plugins").string()
+                                            : kap::paths::user_plugin_dir().string())
+                      << "\n";
+            continue;
+        }
+
+        kap::registry::InstallResult result;
+        try {
+            result = kap::registry::install(
+                one,
+                lock,
+                index,
+                [&](const std::string& summary) {
+                    return one.assume_yes ? true : confirm_install(summary);
+                },
+                global.verbose);
+        }
+        catch (const kap::diag::Error& error) {
+            std::cerr << error.report();
+            ++failures;
+            continue;
+        }
+
+        if (result.installed) {
+            std::cout << "installed " << result.name << " " << result.version << " -> "
+                      << result.directory.string() << "\n";
+        } else {
+            std::cerr << "kap: error: " << result.message << "\n";
+            ++failures;
+        }
     }
     return failures == 0 ? 0 : 1;
 }
 
-// `kap plugin test [name]` — run each plugin's fixture cases (design doc §6.1,
-// Milestone 3 exit criterion). No build tool is ever executed: a case
-// evaluates a command block against a fixture directory and compares the
-// resulting CommandSpec with a committed golden file.
-int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+// `kap plugin remove <name>` — §6.1.
+int run_plugin_remove(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
-    if (args.size() > 1) {
-        std::cerr << "kap: usage: kap plugin test [name]\n";
+    if (args.size() != 1) {
+        std::cerr << "kap: usage: kap plugin remove <name>\n";
         return 2;
     }
-    const std::filesystem::path       root  = search_root(global);
-    std::vector<kap::plugin::Located> found = kap::plugin::discover(root);
+    kap::registry::Lockfile lock = open_lockfile();
 
-    if (args.size() == 1) {
-        const std::string& wanted = args[0];
-        std::erase_if(found, [&wanted](const kap::plugin::Located& p) { return p.name != wanted; });
-        if (found.empty()) {
-            std::cerr << "kap: error: no plugin named '" << wanted << "' under "
-                      << (root / "plugins").string() << "\n";
+    if (global.dry_run) {
+        const auto found = lock.plugins.find(args[0]);
+        if (found == lock.plugins.end()) {
+            std::cerr << "kap: error: '" << args[0] << "' is not installed\n";
             return 1;
         }
+        std::cout << "would remove " << found->second.directory << "\n";
+        return 0;
     }
-    if (found.empty()) {
-        std::cerr << "kap: error: no plugin.kpl files found in " << (root / "plugins").string()
-                  << "\n";
+
+    const kap::registry::InstallResult result =
+        kap::registry::remove(args[0], lock, search_root(global), global.verbose);
+    if (!result.installed) {
+        std::cerr << "kap: error: " << result.message << "\n";
         return 1;
     }
+    std::cout << "removed " << result.name
+              << (result.origin == kap::registry::Origin::Link
+                      ? " (the linked working copy was left alone)"
+                      : "")
+              << "\n";
+    return 0;
+}
+
+// `kap plugin update [name]` — §6.1. With no name, updates everything.
+int run_plugin_update(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    if (args.size() > 1) {
+        std::cerr << "kap: usage: kap plugin update [name]\n";
+        return 2;
+    }
+    const std::filesystem::path root = search_root(global);
+    kap::registry::Lockfile     lock = open_lockfile();
+
+    std::optional<kap::registry::Index> index;
+    try {
+        index = kap::registry::load_index(root);
+    }
+    catch (const kap::diag::Error& error) {
+        std::cerr << error.report();
+        return 1;
+    }
+
+    std::vector<std::string> names;
+    if (args.size() == 1) {
+        names.push_back(args[0]);
+    } else {
+        for (const auto& [name, unused] : lock.plugins) {
+            (void) unused;
+            names.push_back(name);
+        }
+    }
+    if (names.empty()) {
+        std::cout << "nothing to update\n";
+        return 0;
+    }
+
+    int failures = 0;
+    for (const std::string& name : names) {
+        if (global.dry_run) {
+            std::cout << "would update " << name << "\n";
+            continue;
+        }
+        const kap::registry::InstallResult result =
+            kap::registry::update(name, lock, index, root, global.verbose);
+        if (result.installed)
+            std::cout << "updated " << result.name << " to " << result.version << "\n";
+        else if (args.size() == 1) {
+            // An explicit `kap plugin update <name>` that did nothing is a
+            // failure; the same message during "update everything" is just
+            // information about one plugin that was pinned or linked.
+            std::cerr << "kap: error: " << result.message << "\n";
+            ++failures;
+        } else {
+            std::cout << "skipped " << name << ": " << result.message << "\n";
+        }
+    }
+    return failures == 0 ? 0 : 1;
+}
+
+// `kap plugin enable|disable <name>` — §6.1. Recorded in the lockfile rather
+// than by moving files, so the change is reversible and the plugin stays
+// inspectable while it is off.
+int run_plugin_toggle(const kap::cli::GlobalOptions&  global,
+                      const std::vector<std::string>& args,
+                      bool                            enable)
+{
+    const char* verb = enable ? "enable" : "disable";
+    if (args.size() != 1) {
+        std::cerr << "kap: usage: kap plugin " << verb << " <name>\n";
+        return 2;
+    }
+    const std::filesystem::path root = search_root(global);
+    kap::registry::Lockfile     lock = open_lockfile();
+
+    auto found = lock.plugins.find(args[0]);
+    if (found == lock.plugins.end()) {
+        // A plugin discovered on disk but absent from the lockfile is normal:
+        // a bundled or in-repo plugin was never "installed". Toggling it still
+        // has to work, so a row is created for it.
+        const std::vector<kap::plugin::Located> discovered = discover_with_lockfile(root, lock);
+        const auto                              on_disk =
+            std::find_if(discovered.begin(),
+                         discovered.end(),
+                         [&args](const kap::plugin::Located& p) { return p.name == args[0]; });
+        if (on_disk == discovered.end()) {
+            std::cerr << "kap: error: no plugin named '" << args[0] << "'\n";
+            return 1;
+        }
+        kap::registry::Installed row;
+        row.name      = args[0];
+        row.origin    = kap::registry::Origin::Local;
+        row.directory = on_disk->directory.string();
+        found         = lock.plugins.emplace(args[0], std::move(row)).first;
+    }
+
+    if (found->second.enabled == enable) {
+        std::cout << args[0] << " is already " << (enable ? "enabled" : "disabled") << "\n";
+        return 0;
+    }
+    if (global.dry_run) {
+        std::cout << "would " << verb << " " << args[0] << "\n";
+        return 0;
+    }
+
+    found->second.enabled = enable;
+    kap::registry::save_lockfile(lock);
+    kap::detect::invalidate_cache(root); // the candidate set changed
+    std::cout << (enable ? "enabled " : "disabled ") << args[0] << "\n";
+    return 0;
+}
+
+// `kap plugin pin <name> <version>` — §6.1, plus `--clear` to undo it.
+int run_plugin_pin(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    std::vector<std::string> positional;
+    bool                     clear = false;
+    for (const std::string& arg : args) {
+        if (arg == "--clear")
+            clear = true;
+        else if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << "kap: error: unknown option '" << arg << "' for 'kap plugin pin'\n";
+            return 2;
+        } else
+            positional.push_back(arg);
+    }
+
+    if ((clear && positional.size() != 1) || (!clear && positional.size() != 2)) {
+        std::cerr << "kap: usage: kap plugin pin <name> <version>\n"
+                     "      note:  kap plugin pin <name> --clear\n";
+        return 2;
+    }
+
+    kap::registry::Lockfile lock  = open_lockfile();
+    const auto              found = lock.plugins.find(positional[0]);
+    if (found == lock.plugins.end()) {
+        std::cerr << "kap: error: '" << positional[0] << "' is not installed\n"
+                  << "      note: only an installed plugin has a version to pin\n";
+        return 1;
+    }
+
+    if (global.dry_run) {
+        std::cout << "would " << (clear ? "unpin " : "pin ") << positional[0];
+        if (!clear)
+            std::cout << " to " << positional[1];
+        std::cout << "\n";
+        return 0;
+    }
+
+    found->second.pinned = clear ? std::string() : positional[1];
+    kap::registry::save_lockfile(lock);
+    if (clear)
+        std::cout << "unpinned " << positional[0] << "\n";
+    else
+        std::cout << "pinned " << positional[0] << " to " << positional[1] << "\n";
+    return 0;
+}
+
+// `kap plugin new <name> [--template build-system]` — §6.1.
+int run_plugin_new(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    std::string              name;
+    std::string              template_name = "build-system";
+    std::vector<std::string> positional;
+
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        const std::string& arg = args[index];
+        if (arg == "--template") {
+            if (index + 1 >= args.size()) {
+                std::cerr << "kap: error: --template requires a name\n";
+                return 2;
+            }
+            template_name = args[++index];
+        } else if (arg.starts_with("--template=")) {
+            template_name = arg.substr(std::string("--template=").size());
+        } else if (arg.size() > 1 && arg[0] == '-') {
+            std::cerr << "kap: error: unknown option '" << arg << "' for 'kap plugin new'\n";
+            return 2;
+        } else {
+            positional.push_back(arg);
+        }
+    }
+
+    if (positional.size() != 1) {
+        std::string available;
+        for (const std::string& option : kap::registry::templates())
+            available += (available.empty() ? "" : ", ") + option;
+        std::cerr << "kap: usage: kap plugin new <name> [--template " << available << "]\n";
+        return 2;
+    }
+    name = positional[0];
+
+    const std::filesystem::path directory = search_root(global) / name;
+    if (global.dry_run) {
+        std::cout << "would scaffold '" << name << "' (" << template_name << ") into "
+                  << directory.string() << "\n";
+        return 0;
+    }
+
+    const kap::registry::InstallResult result =
+        kap::registry::scaffold(name, template_name, directory);
+    if (!result.installed) {
+        std::cerr << "kap: error: " << result.message << "\n";
+        return 1;
+    }
+
+    std::cout
+        << "created " << result.directory.string() << "\n"
+        << "  plugin.kpl                                    the whole plugin\n"
+        << "  README.md                                     what it does and how to configure it\n"
+        << "  tests/fixtures/example/                        a fake project to evaluate against\n"
+        << "  tests/expected/example.build.steps.json        the commands that should produce\n"
+        << "\nnext:\n"
+        << "  kap plugin doctor --root .          parse, validate, and type-check it\n"
+        << "  kap plugin test " << name << "\n"
+        << "  kap plugin install --link " << directory.string() << "\n";
+    return 0;
+}
+
+// Resolve the arguments `kap plugin doctor` and `kap plugin test` accept.
+//
+// Both take zero or more of: a plugin *name* (matched against what discovery
+// found) or a *path* to a plugin directory. The path form is what a plugin
+// author reaches for first — `kap plugin new my-thing` then
+// `kap plugin doctor my-thing` — and without it they would have to install the
+// thing before they could check whether it parses, which is backwards.
+//
+// Returns false after printing the complaint when a name or path resolves to
+// nothing.
+bool resolve_plugin_arguments(const std::filesystem::path&       root,
+                              const std::vector<std::string>&    requested,
+                              std::vector<kap::plugin::Located>& out)
+{
+    const kap::registry::Lockfile           lock       = open_lockfile();
+    const std::vector<kap::plugin::Located> discovered = discover_with_lockfile(root, lock);
+
+    if (requested.empty()) {
+        out = discovered;
+        if (out.empty()) {
+            std::cerr << "kap: error: no plugins found\n"
+                         "      note: searched "
+                      << (root / ".kap" / "plugins").string()
+                      << ",\n"
+                         "      note: $KAP_PLUGIN_PATH, "
+                      << (kap::paths::user_plugin_dir().empty()
+                              ? std::string("~/.local/share/kap/plugins")
+                              : kap::paths::user_plugin_dir().string())
+                      << ",\n      note: and " << (root / "plugins").string()
+                      << "\n"
+                         "      note: pass a directory to check one directly: "
+                         "kap plugin doctor ./my-plugin\n";
+            return false;
+        }
+        return true;
+    }
+
+    for (const std::string& argument : requested) {
+        const auto by_name =
+            std::find_if(discovered.begin(),
+                         discovered.end(),
+                         [&argument](const kap::plugin::Located& p) { return p.name == argument; });
+        if (by_name != discovered.end()) {
+            out.push_back(*by_name);
+            continue;
+        }
+
+        // Not a known name — try it as a directory containing a plugin.kpl.
+        std::filesystem::path directory(argument);
+        if (directory.is_relative())
+            directory = root / directory;
+        if (kap::fs::is_file(directory / "plugin.kpl")) {
+            kap::plugin::Located located;
+            // filename() of a path ending in "/" is empty, which would produce
+            // a nameless plugin in every message; lexically_normal drops the
+            // trailing separator first.
+            located.name      = directory.lexically_normal().filename().string();
+            located.directory = directory;
+            located.manifest  = directory / "plugin.kpl";
+            located.source    = kap::plugin::Source::ProjectLocal;
+            out.push_back(std::move(located));
+            continue;
+        }
+
+        std::cerr << "kap: error: no plugin named '" << argument << "', and "
+                  << (directory / "plugin.kpl").string() << " does not exist\n";
+        if (!discovered.empty()) {
+            std::cerr << "      note: installed:";
+            for (const kap::plugin::Located& located : discovered)
+                std::cerr << ' ' << located.name;
+            std::cerr << "\n";
+        }
+        return false;
+    }
+    return true;
+}
+
+// `kap plugin doctor [name|path]...` — design doc §6.1.
+//
+// The gate that keeps a plugin which cannot possibly run from being reported
+// as healthy, so it checks everything: the file parses, the manifest has what
+// §6.3 step 3 requires, api_version is one this kap supports, the detect rules
+// are well-formed, and every declared command type-checks. A plugin whose
+// manifest is fine but whose `build` command references an undeclared config
+// key is broken, and saying "[PASS]" about it would be a lie.
+int run_plugin_doctor(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    const std::filesystem::path       root = search_root(global);
+    std::vector<kap::plugin::Located> plugins;
+    if (!resolve_plugin_arguments(root, args, plugins))
+        return 1;
+
+    int failures = 0;
+    for (const kap::plugin::Located& located : plugins) {
+        const std::vector<std::string> problems =
+            kap::registry::validate_payload(located.directory);
+        if (problems.empty()) {
+            std::cout << "[PASS] " << located.name << "\n";
+            if (global.verbose)
+                std::cout << "       " << located.manifest.string() << "\n";
+            continue;
+        }
+        ++failures;
+        std::cout << "[FAIL] " << located.name << "\n";
+        std::cerr << "kap: error: " << located.manifest.string() << ":\n";
+        for (const std::string& problem : problems)
+            std::cerr << "  " << problem << "\n";
+    }
+    return failures == 0 ? 0 : 1;
+}
+
+// `kap plugin test [name|path]...` — design doc §6.1, Milestone 3's exit
+// criterion. No build tool is ever executed: a case evaluates a command block
+// against a fixture directory and compares the resulting CommandSpec with a
+// committed golden file.
+int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    const std::filesystem::path       root = search_root(global);
+    std::vector<kap::plugin::Located> plugins;
+    if (!resolve_plugin_arguments(root, args, plugins))
+        return 1;
 
     // Load through the KPL AST cache (design doc §5.14). It is transparent —
     // a cache hit and a fresh parse produce the same AST — so this is purely
@@ -625,7 +1195,7 @@ int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std
     int failed        = 0;
     int without_cases = 0;
 
-    for (const kap::plugin::Located& located : found) {
+    for (const kap::plugin::Located& located : plugins) {
         const std::vector<kap::plugin::CaseResult> results = kap::plugin::run_tests(located, cache);
         if (results.empty()) {
             ++without_cases;
@@ -657,7 +1227,21 @@ int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std
 int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::string>& argv)
 {
     if (argv.empty()) {
-        std::cerr << "kap: usage: kap plugin <doctor|test> ...\n";
+        std::cerr
+            << "usage: kap plugin <subcommand> [options]\n"
+               "\n"
+               "  list                       show what is installed\n"
+               "  search <query>             search the registry index\n"
+               "  install <name|url|path>    install from the registry, a git URL, or a path\n"
+               "  install --bundle <name>    install a curated set\n"
+               "  install --link <path>      symlink a working copy for development\n"
+               "  remove <name>              uninstall\n"
+               "  update [name]              update one plugin, or all of them\n"
+               "  enable|disable <name>      toggle without uninstalling\n"
+               "  pin <name> <version>       lock a version (--clear to unpin)\n"
+               "  new <name>                 scaffold a new plugin\n"
+               "  test [name]                run a plugin's fixture cases\n"
+               "  doctor                     parse, validate, and type-check every plugin\n";
         return 2;
     }
     const std::string&             subcommand = argv[0];
@@ -667,9 +1251,28 @@ int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::str
         return run_plugin_doctor(global, rest);
     if (subcommand == "test")
         return run_plugin_test(global, rest);
+    if (subcommand == "list")
+        return run_plugin_list(global, rest);
+    if (subcommand == "search")
+        return run_plugin_search(global, rest);
+    if (subcommand == "install")
+        return run_plugin_install(global, rest);
+    if (subcommand == "remove" || subcommand == "uninstall")
+        return run_plugin_remove(global, rest);
+    if (subcommand == "update")
+        return run_plugin_update(global, rest);
+    if (subcommand == "enable")
+        return run_plugin_toggle(global, rest, true);
+    if (subcommand == "disable")
+        return run_plugin_toggle(global, rest, false);
+    if (subcommand == "pin")
+        return run_plugin_pin(global, rest);
+    if (subcommand == "new")
+        return run_plugin_new(global, rest);
 
     std::cerr << "kap: error: unknown subcommand 'plugin " << subcommand << "'\n"
-              << "      note: expected one of: doctor, test\n";
+              << "      note: expected one of: list, search, install, remove, update,\n"
+              << "      note:                  enable, disable, pin, new, test, doctor\n";
     return 2;
 }
 

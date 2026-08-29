@@ -103,6 +103,7 @@ add_library(kap_core STATIC
     core/paths.cpp
     core/exec.cpp
     core/config.cpp
+    core/registry.cpp
     core/plugin.cpp
     core/detect.cpp
 )
@@ -135,6 +136,8 @@ add_executable(
     tests/test_detect.cpp
     tests/test_exec.cpp
     tests/test_config.cpp
+    tests/test_sha256.cpp
+    tests/test_registry.cpp
     tests/test_version.cpp
 )
 target_link_libraries(kap_tests PRIVATE kap_core)

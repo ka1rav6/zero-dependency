@@ -7,6 +7,8 @@
 
 #include "core/toml.hpp"
 
+#include <algorithm>
+
 #include <charconv>
 #include <cstddef>
 #include <optional>
@@ -688,9 +690,22 @@ void write_table(const Value& table, const std::string& prefix, std::string& out
             continue;
         const std::string header =
             prefix.empty() ? render_key(key) : prefix + "." + render_key(key);
-        if (!out.empty() && out.back() != '\n')
-            out += "\n";
-        out += "\n[" + header + "]\n";
+
+        // A table holding nothing but sub-tables does not need a header of its
+        // own: writing `[plugins.cmake-cpp]` already brings `plugins` into
+        // existence. Emitting it anyway leaves a bare `[plugins]` floating
+        // above the entries, which reads like a mistake to anyone skimming a
+        // lockfile. A genuinely empty table is the exception — there the header
+        // is the only thing recording that it exists at all.
+        const bool has_scalars =
+            std::any_of(value.table.begin(), value.table.end(), [](const auto& entry) {
+                return entry.second.kind != Value::Kind::Table;
+            });
+        if (has_scalars || value.table.empty()) {
+            if (!out.empty() && out.back() != '\n')
+                out += "\n";
+            out += "\n[" + header + "]\n";
+        }
         write_table(value, header, out);
     }
 }

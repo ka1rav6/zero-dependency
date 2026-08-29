@@ -31,8 +31,14 @@ echo "== plugin checks =================================================="
 # `doctor` parses, manifest-validates, and type-checks each one; `test`
 # evaluates its fixture cases against committed golden CommandSpecs. Neither
 # executes a real build tool, so this stage needs no ecosystem toolchain.
-./build/kap plugin doctor --root .
-./build/kap plugin test --root .
+KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap plugin doctor --root .
+KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap plugin test --root .
+
+echo "== registry ======================================================="
+# The registry index is a real file this project ships (design doc §6.2). A
+# typo in it should fail here rather than the first time somebody installs.
+./build/kap plugin search cmake --root . >/dev/null
+./build/kap plugin list --root . >/dev/null
 
 echo "== detection ======================================================"
 # Dogfooding: kap's own repository is a CMake project, so the bundled cmake-cpp

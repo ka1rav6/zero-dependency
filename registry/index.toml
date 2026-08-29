@@ -1,0 +1,119 @@
+# registry/index.toml — the kap plugin registry (design doc §6.2).
+#
+# A static, git-hosted index. There is no server: `kap plugin search` reads this
+# file, and `kap plugin install <name>` clones the `url` at `ref`, takes the
+# `subdir`, and verifies the payload against `checksum` before anything is
+# written (§6.3).
+#
+# ## The checksum
+#
+# `checksum` is "sha256:<64 hex>" over the plugin's files — every regular file
+# under the plugin directory, in sorted path order, with the paths themselves
+# folded in and `.git` excluded. It is *enforced*: a payload whose digest does
+# not match causes the install to fail, not to warn (design doc §12 Q3).
+#
+# What it proves: the payload is byte-for-byte what the index author recorded,
+# so a compromised mirror or a truncated download is caught.
+# What it does not prove: anything about the plugin's behaviour. That is why
+# `kap plugin install` shows a summary and asks before it writes.
+#
+# An entry may omit `checksum` while a plugin is being developed; kap then says
+# plainly that it cannot verify the payload rather than pretending it did.
+#
+# ## Adding a plugin
+#
+#   1. Add a [plugins.<name>] table below with url, ref, subdir, and version.
+#   2. Install it once with `kap plugin install <name>` — kap prints the digest
+#      it computed as part of the "checksum mismatch" error if one is set, or
+#      you can read it back out of ~/.local/share/kap/installed-plugins.toml.
+#   3. Paste that digest in as `checksum` and commit.
+
+[registry]
+version = 1
+description = "First-party kap plugins"
+
+# --- ecosystems (design doc Milestone 8) --------------------------------------
+
+[plugins.cmake-cpp]
+description = "Configure, build, test, and clean CMake projects"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/cmake-cpp"
+tags = ["c", "cpp", "cmake", "ninja", "make", "build"]
+
+[plugins.cargo-rust]
+description = "Build, test, lint, format, and clean Cargo projects"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/cargo-rust"
+tags = ["rust", "cargo", "clippy", "rustfmt"]
+
+[plugins.make-generic]
+description = "Drive any project with a Makefile, using whichever targets it defines"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/make-generic"
+tags = ["make", "makefile", "generic", "fallback"]
+
+[plugins.node]
+description = "npm, pnpm, yarn, and bun projects, with workspace-aware dev"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/node"
+tags = ["node", "javascript", "typescript", "npm", "pnpm", "yarn", "bun"]
+
+[plugins.go]
+description = "Build, test, vet, and format Go modules"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/go"
+tags = ["go", "golang", "gofmt"]
+
+[plugins.python-uv]
+description = "Python projects managed with uv"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/python-uv"
+tags = ["python", "uv", "ruff", "pytest"]
+
+# --- system plugins (design doc §6.6, Milestone 9) ----------------------------
+
+[plugins.doctor]
+description = "Check that the tools the matched plugins require are installed"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/doctor"
+tags = ["system", "diagnostics", "bundled"]
+
+[plugins.ports]
+description = "Show which local ports are listening and what is holding them"
+version = "1.0.0"
+url = "https://github.com/kap-project/kap"
+ref = "main"
+subdir = "plugins/ports"
+tags = ["system", "network", "bundled"]
+
+# --- bundles (design doc §6.2) ------------------------------------------------
+
+[bundles.core]
+description = "The six ecosystems most projects need"
+plugins = ["cmake-cpp", "cargo-rust", "make-generic", "node", "go", "python-uv"]
+
+[bundles.system]
+description = "The bundled system plugins: doctor and ports"
+plugins = ["doctor", "ports"]
+
+[bundles.cpp]
+description = "Everything for a C or C++ project"
+plugins = ["cmake-cpp", "make-generic"]
+
+[bundles.web]
+description = "Node plus the containers a web project usually sits in"
+plugins = ["node"]

@@ -237,11 +237,13 @@ expect_empty_stdout "plugin test rejects an unknown plugin name" \
     plugin test no-such-plugin --root "$repo_root"
 expect_status "an unknown plugin name exits 1" 1 \
     plugin test no-such-plugin --root "$repo_root"
-expect_status "plugin test rejects extra arguments" 2 \
-    plugin test a b --root "$repo_root"
-expect_status "an unknown plugin subcommand exits 2" 2 plugin frobnicate --root "$repo_root"
-expect_stderr_contains "an unknown plugin subcommand names the alternatives" \
-    "expected one of: doctor, test" plugin frobnicate --root "$repo_root"
+# `plugin test` takes several names, so two arguments mean two plugins — and
+# a name that is neither installed nor a directory is an error, not a silent
+# no-op.
+expect_status "plugin test names both bundled plugins" 0 \
+    plugin test cargo-rust cmake-cpp --root "$repo_root"
+expect_status "plugin test rejects an unknown name among several" 1 \
+    plugin test cargo-rust no-such-plugin --root "$repo_root"
 
 # A plugin whose golden file disagrees with its plugin.kpl must fail loudly and
 # show both renderings — "it differs" alone is not actionable.
@@ -541,6 +543,103 @@ expect_stderr_contains "an unknown command lists the project commands" "project 
 
 unset KAP_PLUGIN_PATH
 rm -rf "$proj"
+
+# --- the plugin manager (Milestone 7) ---------------------------------------------
+#
+# The library-level pipeline is covered in tests/test_registry.cpp. What only
+# the binary can show is the command surface: which exit codes each subcommand
+# produces, that `install` really refuses without confirmation, and that the
+# whole author loop — new, doctor, test, install --link, list, disable, remove
+# — works from a shell.
+
+pm_dir="$(mktemp -d)"
+
+expect_status "plugin with no subcommand shows usage and exits 2" 2 plugin
+expect_stderr_contains "plugin usage lists the subcommands" "install <name|url|path>" plugin
+expect_status "an unknown plugin subcommand exits 2" 2 plugin frobnicate
+expect_stderr_contains "an unknown plugin subcommand names the alternatives" \
+    "list, search, install" plugin frobnicate
+expect_status "plugin doctor accepts several names at once" 0 \
+    plugin doctor cargo-rust cmake-cpp --root "$repo_root"
+
+# kap plugin new, then the two commands its own output tells you to run.
+expect_status "plugin new scaffolds a plugin" 0 plugin new demo-plugin --root "$pm_dir"
+if [ -f "$pm_dir/demo-plugin/plugin.kpl" ] && [ -f "$pm_dir/demo-plugin/README.md" ]; then
+    pass "plugin new writes plugin.kpl and README.md"
+else
+    fail "plugin new writes plugin.kpl and README.md" "missing files under $pm_dir/demo-plugin"
+fi
+expect_status "plugin new refuses to overwrite" 1 plugin new demo-plugin --root "$pm_dir"
+expect_status "plugin new rejects an unknown template" 1 \
+    plugin new other --template nonsense --root "$pm_dir"
+
+# doctor and test take a *path*, which is what a plugin author has before they
+# have installed anything.
+expect_status "plugin doctor accepts a directory" 0 plugin doctor demo-plugin --root "$pm_dir"
+expect_stdout_contains "plugin doctor passes the scaffold" "[PASS] demo-plugin" \
+    plugin doctor demo-plugin --root "$pm_dir"
+expect_status "plugin test accepts a directory" 0 plugin test demo-plugin --root "$pm_dir"
+expect_stdout_contains "the scaffold ships a passing case" "1 passed" \
+    plugin test demo-plugin --root "$pm_dir"
+expect_status "plugin doctor rejects a path that is not a plugin" 1 \
+    plugin doctor no-such-directory --root "$pm_dir"
+
+# install --link, then the lockfile-backed state commands.
+expect_status "install --link --yes succeeds" 0 \
+    plugin install --link --yes "$pm_dir/demo-plugin"
+expect_stdout_contains "the installed plugin is listed" "demo-plugin" plugin list
+expect_stdout_contains "list shows where it came from" "link" plugin list
+
+expect_status "disable succeeds" 0 plugin disable demo-plugin
+expect_stdout_contains "a disabled plugin is marked" "disabled" plugin list
+expect_status "enable succeeds" 0 plugin enable demo-plugin
+
+expect_status "pin succeeds" 0 plugin pin demo-plugin 0.1.0
+expect_stdout_contains "a pinned plugin shows its pin" "pinned=0.1.0" plugin list
+expect_status "update refuses a pinned plugin" 1 plugin update demo-plugin
+expect_stderr_contains "the refusal explains how to unpin" "--clear" plugin update demo-plugin
+expect_status "unpinning succeeds" 0 plugin pin demo-plugin --clear
+
+# §7's confirmation. stdin is closed, so a prompt must fail rather than proceed.
+"$kap_bin" plugin install --force "$pm_dir/demo-plugin" </dev/null >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    pass "install without --yes refuses when it cannot ask"
+else
+    fail "install without --yes refuses when it cannot ask" "expected a non-zero exit"
+fi
+
+expect_status "remove succeeds" 0 plugin remove demo-plugin
+expect_status "removing it twice exits 1" 1 plugin remove demo-plugin
+if [ -f "$pm_dir/demo-plugin/plugin.kpl" ]; then
+    pass "removing a linked plugin leaves the working copy alone"
+else
+    fail "removing a linked plugin leaves the working copy alone" "the source was deleted"
+fi
+
+# search reads the repository's own registry index.
+expect_status "search finds a bundled plugin" 0 plugin search cmake --root "$repo_root"
+expect_stdout_contains "search reports the match" "cmake-cpp" plugin search cmake --root "$repo_root"
+expect_status "search with no match exits 1" 1 \
+    plugin search zzz-no-such-plugin --root "$repo_root"
+expect_status "search with no query exits 2" 2 plugin search --root "$repo_root"
+
+expect_status "install --bundle with an unknown bundle exits 1" 1 \
+    plugin install --yes --bundle no-such-bundle --root "$repo_root"
+expect_stderr_contains "an unknown bundle lists the real ones" "available:" \
+    plugin install --yes --bundle no-such-bundle --root "$repo_root"
+
+# --dry-run must not touch anything.
+expect_stdout_contains "install honours --dry-run" "would install" \
+    -n plugin install --yes "$pm_dir/demo-plugin"
+expect_stdout_contains "plugin new honours --dry-run" "would scaffold" \
+    -n plugin new dry-plugin --root "$pm_dir"
+if [ -d "$pm_dir/dry-plugin" ]; then
+    fail "plugin new --dry-run creates nothing" "dry-plugin was created"
+else
+    pass "plugin new --dry-run creates nothing"
+fi
+
+rm -rf "$pm_dir"
 
 # --- summary ----------------------------------------------------------------------
 

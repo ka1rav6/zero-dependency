@@ -818,6 +818,7 @@ No package managers (vcpkg, Conan) in the build graph.
 | Filesystem | `std::filesystem` + POSIX `stat` | |
 | String/format | `std::string`, `std::format` (or small polyfill) | |
 | Hashing (cache keys) | In-tree FNV-1a (`core/hash.hpp`) | No OpenSSL requirement. Cache keys only, never a trust decision |
+| Hashing (registry checksums) | In-tree SHA-256 (`core/sha256.hpp`) | §6.3's integrity gate *is* a trust decision, so it needs a hash that is not forgeable. Still no OpenSSL: §9 bans linking a library, not computing a digest |
 | KPL AST cache | In-tree little-endian encoding (`core/kapc.hpp`) | §5.14. Magic + format version + bounds-checked decode; any problem falls back to parsing |
 | Build system for kap itself | CMake + Ninja | CMake is a *dev* tool, not linked |
 | Testing | In-tree micro test harness | `kap_test` macro, no Catch2/GTest |
@@ -1208,23 +1209,65 @@ firing after a *failed* test run would be actively misleading.
 
 ---
 
-### Milestone 7 — Plugin manager ⬅ **next**
+### Milestone 7 — Plugin manager
 **Goal:** Install plugins from registry/git/local.
 
-- [ ] Registry `index.toml` format + fetch/cache
-- [ ] `posix_spawn` git clone (shallow, pinned ref)
-- [ ] Install pipeline: fetch → validate (parse + smoke typecheck) → atomic install → lockfile
-- [ ] `install`, `remove`, `update`, `enable`/`disable`, `pin`, `list`, `search`
-- [ ] `kap plugin new` scaffolds from template
-- [ ] `--link` for local development
-- [ ] Override precedence (project-local > user > bundled)
+- [x] Registry `index.toml` format + fetch/cache
+- [x] git clone (shallow, pinned ref)
+- [x] Install pipeline: fetch → validate (parse + smoke typecheck) → atomic install → lockfile
+- [x] `install`, `remove`, `update`, `enable`/`disable`, `pin`, `list`, `search`
+- [x] `kap plugin new` scaffolds from template
+- [x] `--link` for local development
+- [x] Override precedence (project-local > user > bundled) — landed in Milestone 4
 
 **Exit criteria:** Fresh `kap` install + `kap plugin install cmake-cpp` +
-`kap build` works in a clean container.
+`kap build` works in a clean container. ✅ — `./scripts/ci.sh` exercises the
+whole author loop (`new` → `doctor` → `test` → `install --link` → `list` →
+`disable` → `remove`) through the real binary.
+
+**Notes for later milestones.**
+
+**§12 Q3 is answered: checksum, over SHA-256, enforced.** `core/sha256.hpp` is
+a from-scratch FIPS 180-4 implementation — §9 bans linking OpenSSL, not
+hashing, and a hundred lines of arithmetic with published test vectors is
+exactly what the zero-dependency rule expects to be written in-tree.
+
+It is deliberately a *different* function from `core/hash.hpp`'s FNV-1a, whose
+own comment says it must never become a trust decision. A registry checksum is
+precisely that: the only thing between a user and a tampered payload. FNV-1a is
+trivially forgeable; SHA-256 is not.
+
+The digest covers every regular file under the plugin directory, in sorted path
+order, with the *paths* folded in and `.git` excluded. Paths matter because
+hashing contents alone would give the same digest to a plugin whose
+`plugin.kpl` and `README.md` had been swapped, and kap picks the file to
+execute by name. `.git` is excluded because two shallow clones of the same
+commit do not have identical object stores.
+
+An index entry without a checksum installs, and kap says plainly that it could
+not verify the payload rather than implying it did. A signed index stays
+post-v1: it needs key distribution, which a static git repository does not
+provide.
+
+*What a checksum does not buy* is worth stating: it proves the payload matches
+what the index author recorded, not that the plugin is safe to run. That is why
+§7's confirmation prompt exists, and why a non-interactive stdin is treated as
+"no" — installing third-party code because nobody was there to object is the
+exact failure mode the prompt prevents.
+
+Two other decisions:
+
+*Enable/disable is recorded in the lockfile, not by moving files*, so it is
+reversible and a switched-off plugin stays inspectable by `kap plugin doctor`.
+
+*`kap plugin doctor` and `kap plugin test` accept a path, not just a name.*
+`kap plugin new my-thing` followed by `kap plugin doctor my-thing` is the first
+thing a plugin author does, and requiring an install before a syntax check
+would be backwards.
 
 ---
 
-### Milestone 8 — First-party plugins (core ecosystems)
+### Milestone 8 — First-party plugins (core ecosystems) ⬅ **next**
 **Goal:** Parity with the most common `uu` ecosystems.
 
 Priority order:
@@ -1284,10 +1327,14 @@ authoring, config reference, and Docker workflow.
 
 1. **Windows executor** — `posix_spawn` is POSIX-only. v1 targets Linux;
    Windows needs a `CreateProcess` backend behind the same `Process` API.
-2. **Plugin API versioning** — semver on `api_version`; hard error vs
-   warn-and-skip when a plugin is too new.
-3. **Registry trust** — checksum per version in `index.toml` (current
-   plan) vs. signed index. Decide before Milestone 7.
+2. ~~**Plugin API versioning**~~ — **answered in Milestone 4**: a hard error
+   wherever the user named the plugin explicitly (`kap plugin
+   install/doctor/test`), and a warn-and-skip during detection, so one too-new
+   plugin cannot break `kap build` in an unrelated project.
+3. ~~**Registry trust**~~ — **answered in Milestone 7**: checksum per version
+   in `index.toml`, over an in-tree SHA-256, and *enforced* rather than
+   advisory. A signed index remains post-v1 (it needs key distribution a static
+   git repository cannot provide).
 4. **`glob` implementation** — `std::filesystem` has no glob; roll a
    minimal `fnmatch` wrapper via POSIX `fnmatch(3)` (allowed) vs. pure
    C++ recursive directory walk.
