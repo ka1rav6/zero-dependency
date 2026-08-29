@@ -100,7 +100,9 @@ add_library(kap_core STATIC
     core/cli.cpp
     core/kpl.cpp
     core/kapc.cpp
+    core/paths.cpp
     core/plugin.cpp
+    core/detect.cpp
 )
 # Let `#include "core/..."` resolve from the repository root for consumers.
 target_include_directories(kap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -128,6 +130,7 @@ add_executable(
     tests/test_kpl.cpp
     tests/test_kapc.cpp
     tests/test_plugin.cpp
+    tests/test_detect.cpp
     tests/test_version.cpp
 )
 target_link_libraries(kap_tests PRIVATE kap_core)

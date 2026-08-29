@@ -251,6 +251,93 @@ expect_stderr_contains "a mismatch shows the actual spec" '"actual"' \
 expect_stderr_contains "a mismatch shows the expected spec" '"expected"' \
     plugin test mismatch --root "$bad_dir"
 
+# --- detect (Milestone 4) ---------------------------------------------------------
+#
+# The detection engine has thorough unit tests in tests/test_detect.cpp. What
+# only the real binary can show is the *user-visible* contract: a project that
+# matches exits 0 and names the plugin on stdout, a directory that matches
+# nothing exits 1 with an explanation on stderr, and the cache line flips from
+# "miss" to "hit" on a second run.
+
+detect_dir="$(mktemp -d)"
+mkdir -p "$detect_dir/proj"
+printf 'cmake_minimum_required(VERSION 3.16)\n' > "$detect_dir/proj/CMakeLists.txt"
+export KAP_PLUGIN_PATH="$repo_root/plugins"
+
+expect_status "detect exits 0 in a project it recognises" 0 detect --root "$detect_dir/proj"
+expect_stdout_contains "detect names the winning plugin" "cmake-cpp" \
+    detect --root "$detect_dir/proj"
+expect_stdout_contains "detect reports the marker that fired" "CMakeLists.txt" \
+    detect --root "$detect_dir/proj"
+expect_stdout_contains "detect reports the priority and score" "priority=30 score=1" \
+    detect --root "$detect_dir/proj"
+
+# First run scans; the entry it leaves behind makes the second run a hit.
+"$kap_bin" detect --root "$detect_dir/proj" >/dev/null 2>&1
+expect_stdout_contains "a second detect run hits the cache" "cache:  hit" \
+    detect --root "$detect_dir/proj"
+expect_stdout_contains "--refresh forces a rescan" "cache:  miss" \
+    detect --refresh --root "$detect_dir/proj"
+
+if [ -f "$detect_dir/proj/.kap/cache.json" ]; then
+    pass "detect writes .kap/cache.json"
+else
+    fail "detect writes .kap/cache.json" "no cache file under $detect_dir/proj/.kap"
+fi
+if grep -q '^\*$' "$detect_dir/proj/.kap/.gitignore" 2>/dev/null; then
+    pass "the cache directory ignores itself"
+else
+    fail "the cache directory ignores itself" "no self-ignoring .kap/.gitignore"
+fi
+
+# Deleting the marker must change the answer, not serve a stale one.
+rm -f "$detect_dir/proj/CMakeLists.txt"
+expect_status "removing the marker makes detection fail again" 1 detect --root "$detect_dir/proj"
+
+mkdir -p "$detect_dir/empty"
+expect_status "detect exits 1 where nothing matches" 1 detect --root "$detect_dir/empty"
+expect_empty_stdout "a failed detect writes nothing to stdout" detect --root "$detect_dir/empty"
+expect_stderr_contains "a failed detect says which plugins were considered" "considered:" \
+    detect --root "$detect_dir/empty"
+
+# A tie is refused rather than guessed at (design doc §3.2 step 4), and the
+# error has to be actionable enough to fix without reading the design doc.
+tie_plugins="$detect_dir/tie-plugins"
+for name in alpha beta; do
+    mkdir -p "$tie_plugins/$name"
+    cat > "$tie_plugins/$name/plugin.kpl" <<KPL
+manifest { name = "$name" version = "1.0.0" api_version = 1 priority = 25 }
+detect { file_exists "shared.txt" }
+KPL
+done
+mkdir -p "$detect_dir/tie"
+printf 'x\n' > "$detect_dir/tie/shared.txt"
+
+KAP_PLUGIN_PATH="$tie_plugins" "$kap_bin" detect --root "$detect_dir/tie" >/dev/null 2>&1
+if [ $? -eq 1 ]; then
+    pass "a detection tie exits 1"
+else
+    fail "a detection tie exits 1" "expected exit status 1"
+fi
+tie_err="$(KAP_PLUGIN_PATH="$tie_plugins" "$kap_bin" detect --root "$detect_dir/tie" 2>&1 >/dev/null)"
+case "$tie_err" in
+    *alpha*beta*ecosystem*) pass "a tie names both plugins and the fix" ;;
+    *) fail "a tie names both plugins and the fix" "got: $tie_err" ;;
+esac
+
+# A pin in kap.toml settles it without an error.
+printf '[detect]\necosystem = "beta"\n' > "$detect_dir/tie/kap.toml"
+tie_out="$(KAP_PLUGIN_PATH="$tie_plugins" "$kap_bin" detect --refresh --root "$detect_dir/tie" 2>/dev/null)"
+case "$tie_out" in
+    beta*) pass "a kap.toml pin settles a tie" ;;
+    *) fail "a kap.toml pin settles a tie" "got: $tie_out" ;;
+esac
+
+expect_status "detect rejects an unknown option" 2 detect --nonsense --root "$detect_dir/proj"
+
+unset KAP_PLUGIN_PATH
+rm -rf "$detect_dir"
+
 # --- malformed config -------------------------------------------------------------
 
 printf 'a = @\n' > "$bad_dir/kap.toml"

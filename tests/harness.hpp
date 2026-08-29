@@ -24,6 +24,7 @@
 // test_*.cpp all follow this shape.
 
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
@@ -124,6 +125,15 @@ inline std::string to_string_display(const char* s)
 inline std::string to_string_display(bool b)
 {
     return b ? "true" : "false";
+}
+
+// std::filesystem::path has no std::to_string overload, so without this the
+// generic fallback below fails to compile the moment a test compares two
+// paths — which the detection tests do constantly, since "which directory did
+// detection settle on" is one of the engine's actual outputs.
+inline std::string to_string_display(const std::filesystem::path& p)
+{
+    return p.string();
 }
 
 template <typename T> std::string to_string_display(const T& v)

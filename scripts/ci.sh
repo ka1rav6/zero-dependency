@@ -8,8 +8,7 @@
 #
 # Configures, builds, runs the unit tests, enforces formatting, and
 # smoke-tests the binary. Later milestones add their own steps here:
-#   - Milestone 2+: `kap plugin doctor` golden-parses every .kpl fixture
-#   - Milestone 8:  `kap plugin test` for every first-party plugin
+#   - Milestone 8: `kap plugin test` for every first-party plugin
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,6 +33,17 @@ echo "== plugin checks =================================================="
 # executes a real build tool, so this stage needs no ecosystem toolchain.
 ./build/kap plugin doctor --root .
 ./build/kap plugin test --root .
+
+echo "== detection ======================================================"
+# Dogfooding: kap's own repository is a CMake project, so the bundled cmake-cpp
+# plugin must claim it. This is the cheapest possible check that the detection
+# engine, plugin discovery, and the KPL loader agree with each other on a real
+# tree rather than only on synthetic fixtures.
+detected="$(KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap detect --refresh --root . | head -1)"
+case "$detected" in
+    cmake-cpp*) echo "ci.sh: detect resolved '$detected'" ;;
+    *) echo "ci.sh: expected detect to resolve cmake-cpp, got '$detected'" >&2; exit 1 ;;
+esac
 
 echo "== smoke tests ===================================================="
 # Milestone-0 contract: version banner, help, and a loud failure for any

@@ -4,14 +4,14 @@
 // project you're standing in and runs the right underlying tool for common
 // tasks (build, test, lint, run, ...). See docs/design.md for the full design.
 //
-// Milestones 0-3 are wired: the CLI parser (core/cli.hpp), the TOML parser
-// (core/toml.hpp), and the whole KPL front-end, type checker, and interpreter
-// (core/kpl.hpp) behind `kap plugin doctor` and `kap plugin test`.
+// Milestones 0-4 are wired: the CLI parser (core/cli.hpp), the TOML parser
+// (core/toml.hpp), the whole KPL front-end, type checker, and interpreter
+// (core/kpl.hpp), and the detection engine (core/detect.hpp) behind
+// `kap detect`, `kap plugin doctor`, and `kap plugin test`.
 //
-// The detection engine, the executor, and the config merge arrive in
-// Milestones 4-6. Until then there is deliberately no `kap build`: it would
-// have to guess which plugin applies, and guessing is the one thing design doc
-// §3.2 step 4 forbids.
+// The executor and the config merge arrive in Milestones 5-6. Until then there
+// is deliberately no `kap build`: detection can now say *which* plugin applies,
+// but nothing here can yet run what that plugin returns.
 
 #include <exception>
 #include <filesystem>
@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "core/cli.hpp"
+#include "core/detect.hpp"
 #include "core/diag.hpp"
 #include "core/fs.hpp"
 #include "core/kapc.hpp"
@@ -40,8 +41,8 @@ void print_usage(std::ostream& out)
            "\n"
            "commands:\n"
            "  config get <key>     read one key from ./kap.toml (or --root)\n"
-           "  detect               resolve the active project plugin\n"
-           "  plugin doctor        validate bundled plugin files\n"
+           "  detect [--refresh]   resolve the active project plugin\n"
+           "  plugin doctor        validate installed plugin files\n"
            "  plugin test [name]   run plugin fixture tests\n"
            "\n"
            "global flags:\n"
@@ -50,35 +51,103 @@ void print_usage(std::ostream& out)
            "      --set k=v      override one config key (repeatable)\n"
            "      --verbose      extra logging\n"
            "\n"
-           "kap is under construction (Milestone 3). See docs/design.md for\n"
+           "kap is under construction (Milestone 4). See docs/design.md for\n"
            "the roadmap.\n";
 }
 
 std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 
-// `kap detect` — resolve the project's matching plugin and print the chosen
-// plugin name and priority score. This is the Milestone-4 debug hook.
+// `detect.ecosystem` from <root>/kap.toml (design doc §3.2 step 4): the pin
+// that settles which plugin owns a directory when several match. Read here
+// rather than inside the engine because the engine takes configuration as an
+// input; Milestone 6's full config merge will supply the same value from the
+// merged layers instead.
+//
+// A malformed kap.toml is not this function's problem to report — it will be
+// reported properly by the config layer — so a parse failure yields "no pin".
+std::string project_pin(const std::filesystem::path& root)
+{
+    const std::filesystem::path file = root / "kap.toml";
+    if (!kap::fs::is_file(file))
+        return {};
+    try {
+        const kap::toml::Document doc   = kap::toml::parse(kap::fs::read_text(file), file.string());
+        const auto                value = doc.get("detect.ecosystem");
+        if (value && value->kind == kap::toml::Value::Kind::String)
+            return value->str;
+    }
+    catch (const kap::diag::Error&) {
+    }
+    return {};
+}
+
+// `kap detect` — resolve the project's matching plugin and explain the answer
+// (design doc Milestone 4's debug subcommand).
+//
+// This is the one command whose whole job is to make the detection engine
+// legible: which plugin won, how many of its rules fired, which files fired
+// them, and whether the answer came from .kap/cache.json or a fresh scan.
+// When detection *fails*, that transparency matters even more, so a failed
+// run prints the candidates it considered and any warnings it collected.
 int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
 {
-    if (!args.empty()) {
-        std::cerr << "kap: usage: kap detect\n";
+    bool refresh = false;
+    for (const std::string& arg : args) {
+        if (arg == "--refresh" || arg == "-r") {
+            refresh = true;
+            continue;
+        }
+        std::cerr << "kap: error: unknown option '" << arg << "' for 'kap detect'\n"
+                  << "      note: usage: kap detect [--refresh]\n";
         return 2;
     }
+
     const std::filesystem::path root = search_root(global);
+
+    kap::plugin::DiscoveryOptions discovery;
+    discovery.project_root                          = root;
+    const std::vector<kap::plugin::Located> plugins = kap::plugin::discover(discovery);
+
+    kap::detect::Options options;
+    options.ast_cache   = kap::kapc::cache_directory();
+    options.read_cache  = !refresh;
+    options.max_walk_up = 0;
+    options.pinned      = project_pin(root);
+
     try {
-        const std::vector<kap::plugin::DetectionMatch> matches = kap::plugin::detect(root);
-        if (matches.empty()) {
-            std::cerr << "kap: error: no plugin matched " << root.string() << "\n";
+        const kap::detect::Resolution resolution = kap::detect::resolve(root, plugins, options);
+
+        for (const std::string& warning : resolution.warnings)
+            std::cerr << "kap: warning: " << warning << "\n";
+
+        if (!resolution.matched()) {
+            std::cerr << "kap: error: no plugin claims " << resolution.root.string() << "\n";
+            if (plugins.empty()) {
+                std::cerr << "      note: no plugins are installed; try 'kap plugin install "
+                             "--bundle core'\n";
+            } else {
+                std::cerr << "      note: considered:";
+                for (const kap::plugin::Located& located : plugins)
+                    std::cerr << ' ' << located.name;
+                std::cerr << "\n";
+            }
             return 1;
         }
-        const kap::plugin::DetectionMatch& match = matches.front();
-        std::cout << match.located.name << " score=" << match.score << "\n";
-        if (!match.matched_files.empty()) {
-            std::cout << "  markers:";
-            for (const std::string& file : match.matched_files)
-                std::cout << ' ' << file;
-            std::cout << "\n";
+
+        for (const kap::detect::Match& match : resolution.matches) {
+            std::cout << match.name << "  priority=" << match.priority << " score=" << match.score
+                      << (match.composable ? " (composable)" : "") << "\n";
+            if (!match.matched_files.empty()) {
+                std::cout << "  markers:";
+                for (const std::string& file : match.matched_files)
+                    std::cout << ' ' << file;
+                std::cout << "\n";
+            }
+            std::cout << "  source: " << kap::plugin::source_name(match.located.source) << " ("
+                      << match.located.directory.string() << ")\n";
         }
+        std::cout << "  root:   " << resolution.root.string() << "\n";
+        std::cout << "  cache:  " << (resolution.from_cache ? "hit" : "miss (rescanned)") << "\n";
         return 0;
     }
     catch (const kap::diag::Error& error) {

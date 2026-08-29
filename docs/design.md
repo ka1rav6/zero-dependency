@@ -1057,22 +1057,59 @@ directive statements (name + arguments) that compile straight to a
 
 ---
 
-### Milestone 4 — Detection engine ⬅ **next**
+### Milestone 4 — Detection engine
 **Goal:** Given installed plugins, pick the right one for a directory.
 
-- [ ] Extract `detect` rules from AST at plugin load
-- [ ] Rule evaluators: `file_exists`, `file_exists_any`, `file_contains`,
+- [x] Extract `detect` rules from AST at plugin load
+- [x] Rule evaluators: `file_exists`, `file_exists_any`, `file_contains`,
       `dir_exists`
-- [ ] Priority + `supersedes` resolution, tie error path
-- [ ] `.kap/cache.json` mtime-based cache
-- [ ] `kap detect` debug subcommand (prints matched plugin + score)
+- [x] Priority + `supersedes` resolution, tie error path
+- [x] `.kap/cache.json` mtime-based cache
+- [x] `kap detect` debug subcommand (prints matched plugin + score)
 
 **Exit criteria:** Synthetic fixture trees resolve to the expected plugin;
-cache hit skips re-scan.
+cache hit skips re-scan. ✅ — 33 detection unit tests + 17 end-to-end
+assertions, green under `./scripts/ci.sh`.
+
+**Notes for later milestones.**
+
+`core/detect.hpp` is the engine; `core/plugin.hpp`'s `discover()` now
+implements §6.5's override precedence in full (project-local > $KAP_PLUGIN_PATH
+> user-installed > bundled > the repository's own `plugins/`), so Milestone 7
+only has to *write* into those directories, not teach anything how to find
+them. `core/paths.hpp` resolves every XDG location in one place.
+
+Three points where the implementation is more specific than §3 could be:
+
+*Score vs. priority.* §3.2 uses "score" for what a plugin's satisfied rules
+contribute and "priority" for the manifest number. They are separate fields:
+ranking is by `priority`, and `score` (how many rules fired) is reported by
+`kap detect` as diagnostic detail. A plugin matching more rules does not
+out-rank a higher-priority one.
+
+*Cache invalidation.* §3.2 says "keyed by a hash of the matched marker files'
+mtimes". That alone cannot see a *newly added* marker — before the change there
+were no markers to hash — so the cache has two guards: a precheck key over the
+root's directory listing plus every candidate plugin's manifest mtime, and the
+recorded per-marker mtimes re-verified on read. The listing is used rather than
+the root's own mtime because writing the cache creates `.kap/`, which bumps
+that mtime and would make the cache invalidate itself on every single write.
+`kap detect --refresh` bypasses the entry for the case neither guard sees: a
+marker created deep inside a subdirectory that no existing rule watches.
+
+*Detect rules are sandboxed.* A `detect` rule runs before the interpreter's §7
+sandbox exists, so `core/detect.cpp` applies the same containment itself: an
+absolute or `../`-escaping marker path simply never matches. Otherwise a plugin
+could map the filesystem above a project just by watching which plugin wins.
+
+*§12 Q2 is settled* (see §11 Milestone 7 notes): a plugin declaring an
+`api_version` newer than `detect::kSupportedApiVersion` is a hard error where
+the user named it explicitly and a warn-and-skip during detection, so one
+too-new plugin cannot break `kap build` in an unrelated project.
 
 ---
 
-### Milestone 5 — Executor
+### Milestone 5 — Executor ⬅ **next**
 **Goal:** Actually run commands.
 
 - [ ] `posix_spawn` wrapper with stdout/stderr streaming

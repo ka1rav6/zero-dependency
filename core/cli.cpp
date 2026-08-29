@@ -101,11 +101,27 @@ Invocation parse(const std::vector<std::string>& args)
             continue;
         }
 
-        // Any other dash-prefixed token is a flag kap does not know; fail
-        // loudly rather than guessing. A lone "-" is conventionally stdin and
-        // is kept as a positional.
+        // Any other dash-prefixed token is not a *global* flag. Where it goes
+        // depends on whether a command has been named yet — the same rule git
+        // uses, and for the same reason.
+        //
+        // Before the command word there is nothing it could belong to, so it
+        // is a mistake and is refused loudly rather than guessed at.
+        //
+        // After the command word it is the command's own option (`kap detect
+        // --refresh`, `kap plugin install --link ./x`), which this parser has
+        // no business validating: only the subcommand knows its own flags, and
+        // teaching the global parser every subcommand's option table would put
+        // the two in different files and let them drift. It goes into
+        // `inv.argv` and the subcommand rejects what it does not recognise.
+        //
+        // A lone "-" is conventionally stdin and stays a positional.
         if (arg.size() > 1 && arg[0] == '-') {
-            fail("unknown option '" + arg + "'");
+            if (inv.command.empty()) {
+                fail("unknown option '" + arg + "'");
+            }
+            inv.argv.push_back(arg);
+            continue;
         }
 
         // Positional tokens: the first one is the command, the rest are its

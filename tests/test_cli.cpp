@@ -261,3 +261,56 @@ KAP_TEST("--help and --version are recorded independently of any command")
     const kap::cli::Invocation v = kap::cli::parse({"-V"});
     KAP_ASSERT(v.global.version);
 });
+
+// --- command-local options (Milestone 4) ------------------------------------------
+//
+// `kap detect --refresh` and `kap plugin install --link ./x` are options that
+// belong to a subcommand, not to kap. The global parser cannot validate them
+// without duplicating every subcommand's option table, so it forwards them.
+
+KAP_TEST("an option after the command word is forwarded to the command")
+{
+    const kap::cli::Invocation inv = kap::cli::parse({"detect", "--refresh"});
+    KAP_ASSERT_EQ(inv.command, std::string("detect"));
+    KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(inv.argv.front(), std::string("--refresh"));
+});
+
+KAP_TEST("an unknown option before the command word is still refused")
+{
+    // Nothing has been named that it could belong to, so guessing would be
+    // strictly worse than failing.
+    KAP_ASSERT_THROWS(kap::diag::Error, kap::cli::parse({"--bogus", "detect"}));
+});
+
+KAP_TEST("global flags still win over command forwarding, wherever they appear")
+{
+    const kap::cli::Invocation inv =
+        kap::cli::parse({"plugin", "install", "--link", "./x", "--verbose", "-n"});
+    KAP_ASSERT(inv.global.verbose);
+    KAP_ASSERT(inv.global.dry_run);
+    KAP_ASSERT_EQ(inv.command, std::string("plugin"));
+    KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(inv.argv[0], std::string("install"));
+    KAP_ASSERT_EQ(inv.argv[1], std::string("--link"));
+    KAP_ASSERT_EQ(inv.argv[2], std::string("./x"));
+});
+
+KAP_TEST("forwarding preserves argument order, which subcommands rely on")
+{
+    const kap::cli::Invocation inv = kap::cli::parse({"plugin", "test", "-v", "name", "--json"});
+    KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(4));
+    KAP_ASSERT_EQ(inv.argv[0], std::string("test"));
+    KAP_ASSERT_EQ(inv.argv[1], std::string("-v"));
+    KAP_ASSERT_EQ(inv.argv[2], std::string("name"));
+    KAP_ASSERT_EQ(inv.argv[3], std::string("--json"));
+});
+
+KAP_TEST("a command-local option never leaks into passthrough")
+{
+    const kap::cli::Invocation inv = kap::cli::parse({"build", "--quiet", "--", "--release"});
+    KAP_ASSERT_EQ(inv.argv.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(inv.argv.front(), std::string("--quiet"));
+    KAP_ASSERT_EQ(inv.passthrough.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(inv.passthrough.front(), std::string("--release"));
+});

@@ -2,15 +2,14 @@
 
 // core/plugin.hpp
 //
-// Finding plugins on disk and running their fixture tests — the parts of
-// design doc §6 that Milestone 3 needs, and no more. The full plugin manager
-// (install from a registry or a git URL, lockfile, enable/disable, pinning)
-// arrives in Milestone 7 and will build on `discover()` rather than replace it.
+// Finding plugins on disk and running their fixture tests (design doc §6.5 and
+// §5.2). The full plugin manager — install from a registry or a git URL, the
+// lockfile, enable/disable, pinning — lives in core/registry.hpp and builds on
+// `discover()` rather than replacing it.
 //
-// A plugin is a directory containing `plugin.kpl` (§5.2). Today only the
-// bundled first-party plugins under `<root>/plugins/` are searched; §6.5's
-// three-level override precedence (project-local > user-installed > bundled)
-// is a Milestone-7 concern.
+// A plugin is a directory containing `plugin.kpl` (§5.2). Which directories
+// are searched, and in what order, is §6.5's override precedence; see
+// `DiscoveryOptions` below for the exact list.
 
 #include <filesystem>
 #include <string>
@@ -21,17 +20,76 @@ namespace kap
 namespace plugin
 {
 
+// Where a plugin was found. The order of the enumerators *is* §6.5's override
+// precedence: a project-local plugin shadows a user-installed one of the same
+// name, which shadows one bundled with the binary.
+enum class Source
+{
+    ProjectLocal, // <root>/.kap/plugins/<name>/
+    SearchPath,   // an entry of $KAP_PLUGIN_PATH
+    User,         // ~/.local/share/kap/plugins/<name>/
+    Bundled,      // <prefix>/share/kap/plugins/<name>/
+    Repository,   // <root>/plugins/<name>/  — see DiscoveryOptions::include_repository
+};
+
+// A human-readable name for a Source, used by `kap plugin list`.
+const char* source_name(Source source);
+
 // One plugin found on disk.
 struct Located
 {
     std::string           name;      // the directory name, e.g. "cmake-cpp"
-    std::filesystem::path directory; // <root>/plugins/cmake-cpp
-    std::filesystem::path manifest;  // <root>/plugins/cmake-cpp/plugin.kpl
+    std::filesystem::path directory; // .../plugins/cmake-cpp
+    std::filesystem::path manifest;  // .../plugins/cmake-cpp/plugin.kpl
+    Source                source = Source::Repository;
+
+    // Set by the lockfile layer (§6.1 `kap plugin enable/disable`). Discovery
+    // itself reports every plugin it finds and leaves the policy to the
+    // caller, so `kap plugin list` can show a disabled plugin as disabled
+    // instead of pretending it does not exist.
+    bool enabled = true;
 };
 
-// Every plugin directory under `<root>/plugins`, sorted by name so output is
-// deterministic. Directories without a `plugin.kpl` are skipped rather than
-// reported: a stray directory is not a broken plugin.
+// Which directories `discover()` searches. Every field defaults to the
+// behaviour a real `kap` invocation wants; tests turn the machine-wide tiers
+// off so a plugin the developer happens to have installed cannot change a test
+// result.
+struct DiscoveryOptions
+{
+    // The project root. Supplies the ProjectLocal tier (<root>/.kap/plugins)
+    // and, when `include_repository` is set, the Repository tier.
+    std::filesystem::path project_root;
+
+    // <root>/plugins — not one of §6.5's three tiers, but the directory a
+    // checkout of kap itself (and any repository that develops plugins
+    // in-tree) keeps its plugins in. Searched last, so an installed plugin of
+    // the same name always wins. This is what makes `kap plugin doctor
+    // --root .` work in a fresh clone with nothing installed.
+    bool include_repository = true;
+
+    // $KAP_PLUGIN_PATH, colon-separated. Read from the environment unless
+    // `search_path` below is set, which is how tests pin it.
+    bool include_search_path = true;
+
+    // ~/.local/share/kap/plugins (§6.4).
+    bool include_user = true;
+
+    // <prefix>/share/kap/plugins, next to the binary (§6.5).
+    bool include_bundled = true;
+
+    // When non-empty, replaces $KAP_PLUGIN_PATH entirely.
+    std::vector<std::filesystem::path> search_path;
+};
+
+// Every plugin visible from `options`, sorted by name.
+//
+// A name found in more than one tier is reported once, from the
+// highest-precedence tier that has it (§6.5). Directories without a
+// `plugin.kpl` are skipped rather than reported: a stray directory is not a
+// broken plugin.
+std::vector<Located> discover(const DiscoveryOptions& options);
+
+// Convenience overload: discover with default options rooted at `root`.
 std::vector<Located> discover(const std::filesystem::path& root);
 
 // The outcome of one fixture test case (`kap plugin test`).
@@ -41,19 +99,6 @@ struct CaseResult
     bool        passed = false;
     std::string detail; // empty when passed; otherwise the expected/actual diff
 };
-
-// One plugin that matched the detection rules in a project root.
-struct DetectionMatch
-{
-    Located                  located;
-    std::vector<std::string> matched_files;
-    int                      score = 0;
-};
-
-// Evaluate the bundled plugin manifests and detect rules against `root`.
-// Returns the winning plugin(s) in priority order: a single result when one
-// plugin wins, or an empty vector when nothing matched.
-std::vector<DetectionMatch> detect(const std::filesystem::path& root);
 
 // Run every fixture test case a plugin declares.
 //
