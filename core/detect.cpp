@@ -17,6 +17,7 @@
 #include "core/json.hpp"
 #include "core/kapc.hpp"
 #include "core/paths.hpp"
+#include "core/version.hpp"
 
 namespace kap
 {
@@ -389,6 +390,19 @@ std::string precheck_key(const std::filesystem::path&        root,
         material += entry;
         material += ",";
     }
+
+    // kap's own version. The entry records a decision made by *this* build's
+    // detection engine, and an upgrade can change that decision without any
+    // plugin or project file moving — a new rule kind, a fixed evaluation
+    // order, a different set of statement kinds in the AST cache. Without
+    // this, an upgraded kap silently trusts the answer an older one wrote and
+    // the only cure is `--refresh`, which a user has no reason to suspect.
+    // kFormatVersion is included beside the release string because a source
+    // build can change the AST shape without the version number moving.
+    material += "|kap:";
+    material += kap::kVersionString;
+    material += ":";
+    material += std::to_string(kapc::kFormatVersion);
 
     // Plugin identity and manifest mtime: installing, removing, or editing a
     // plugin changes what the answer should be even when the project has not
