@@ -33,8 +33,13 @@
 // without reading anything, and the hash disambiguates two plugins of the same
 // name installed at different paths (§6.5 explicitly allows a project-local
 // plugin to shadow a user-installed one, so this is a real collision, not a
-// hypothetical). Once Milestone 7's installed-plugins.toml records each
-// plugin's version, that can be folded into the name as well.
+// hypothetical).
+//
+// The lockfile now records each plugin's version, so the version *could* be
+// folded into the name — but it would buy nothing. The absolute path already
+// makes the key unique, and the mtime and size in the entry header already
+// catch a plugin that changed underneath it. A version in the file name would
+// only add a way for the two to disagree.
 
 #include <cstdint>
 #include <filesystem>

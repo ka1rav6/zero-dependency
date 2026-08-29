@@ -9,6 +9,10 @@ Companion documents:
 |---|---|
 | `docs/design.md` | **The spec.** What we are building and why. The roadmap lives here. |
 | `AGENTS.md` | The rules every change must follow. Short; read it once. |
+| `docs/usage.md` | The user guide: every command, flag, and exit code. |
+| `docs/configuration.md` | The `kap.toml` reference. |
+| `docs/plugins.md` | Writing, testing, installing, and publishing a plugin. |
+| `docs/PLUGIN_API.md` | The KPL language reference and grammar. |
 | `docs/dockerusage.md` | The full Docker guide. |
 | `plugins/*/README.md` | Per-plugin user documentation (config keys, commands). |
 | `howto.md` (this file) | How the code actually works, and how to work on it. |
@@ -78,19 +82,26 @@ passes locally and fails in the container, the container is right.
 ## 3. What is in the repository
 
 ```
-core/            the kap binary and its library
-  version.hpp    version constants — the single source of truth (see §9)
-  diag.hpp       errors: severity, source location, rendering
-  argv.hpp       argv arrays and shell-quoting for display
-  fs.hpp         sandboxed filesystem access (capped reads, globbing)
-  hash.hpp       FNV-1a, for cache keys
-  toml.hpp/.cpp  the minimal TOML parser (user config)
-  json.hpp/.cpp  the minimal JSON parser/writer (golden files, caches)
-  cli.hpp/.cpp   the command-line parser
-  kpl.hpp/.cpp   KPL: lexer, parser, schema, type checker, interpreter, host
-  kapc.hpp/.cpp  the .kapc AST cache
-  plugin.hpp/.cpp plugin discovery and the fixture-test runner
-  main.cpp       wiring: parse argv, dispatch, print, exit
+core/                the kap binary and its library
+  version.hpp        version constants — the single source of truth (see §9)
+  diag.hpp           errors: severity, source location, rendering
+  argv.hpp           argv arrays and shell-quoting for display
+  fs.hpp             sandboxed filesystem access (capped reads, globbing)
+  paths.hpp/.cpp     every XDG and prefix-relative directory, in one place
+  hash.hpp           FNV-1a, for cache keys
+  sha256.hpp         SHA-256, for registry checksums — a *different* question
+  toml.hpp/.cpp      the minimal TOML parser and writer (user config, lockfile)
+  json.hpp/.cpp      the minimal JSON parser/writer (golden files, caches)
+  cli.hpp/.cpp       the command-line parser
+  config.hpp/.cpp    the layered configuration merge (§5.12)
+  kpl.hpp/.cpp       KPL: lexer, parser, schema, type checker, interpreter, host
+  kapc.hpp/.cpp      the .kapc AST cache
+  plugin.hpp/.cpp    plugin discovery (§6.5) and the fixture-test runner
+  detect.hpp/.cpp    the detection engine (§3)
+  exec.hpp/.cpp      the executor — the ONLY place kap creates a process
+  registry.hpp/.cpp  the plugin manager: index, lockfile, install pipeline
+  completions.hpp/.cpp  the generated bash/zsh/fish scripts
+  main.cpp           wiring: parse argv, dispatch, print, exit
 
 tests/
   harness.hpp    the in-tree test framework (KAP_TEST, KAP_ASSERT*)
@@ -99,55 +110,77 @@ tests/
   e2e.sh         end-to-end tests that drive the built binary
   fixtures/      sample input files
 
-plugins/         first-party KPL plugins
-  cmake-cpp/     plugin.kpl + README.md + tests/{fixtures,expected}
-  cargo-rust/    same shape
-registry/        the plugin index               (Milestone 7)
-docker/          dev container
-scripts/         ci.sh, bootstrap.sh, in-docker.sh
-docs/            design.md, dockerusage.md
+plugins/         the eight first-party KPL plugins, each
+                 plugin.kpl + README.md + tests/{fixtures,expected}
+  cmake-cpp/ cargo-rust/ node/ go/ python-uv/ make-generic/   ecosystems
+  doctor/ ports/                                              system plugins
+registry/        index.toml — the plugin registry (§6.2)
+docker/          dev and dev-full containers
+scripts/         ci.sh, ci-full.sh, install.sh, bootstrap.sh, in-docker.sh
+docs/            README, usage, configuration, plugins, PLUGIN_API,
+                 dockerusage, design
 ```
 
 ---
 
-## 4. How the core works today
+## 4. How the core works
 
-`kap` is being built in milestones (`docs/design.md` §11). Milestones 0–3 are
-done: the shared infrastructure, the whole KPL front-end and interpreter, the
-AST cache, and `kap plugin doctor` / `kap plugin test`. Detection, the
-executor, config merging, and the plugin manager are next.
-
-Two chains exist today. The Milestone-1 one:
+All eleven milestones in `docs/design.md` §11 are complete; the version is
+1.0.0. The chain below is the whole of `kap build`, and it is `main.cpp`'s
+`run_project_command()` read top to bottom.
 
 ```
 main()
-  └─ cli::parse(argv)          -> Invocation { command, argv, passthrough, global }
-       └─ "config get <key>"
-            └─ fs::read_text     (capped, sandboxed)
-            └─ toml::parse       (-> a Document)
-            └─ Document::get     (dotted path lookup)
+  └─ cli::parse(argv)             -> Invocation { command, argv, passthrough, global }
+  └─ run_project_command("build", inv)
+       ├─ config::load(root)      -> the merged layers (§5.12) + kap's own settings
+       ├─ plugin::discover(...)   -> every plugin, in §6.5 precedence order
+       ├─ registry::apply_lockfile(...)   -> which of them the user disabled
+       ├─ detect::resolve(...)    -> which one owns this directory (§3)
+       │    ├─ kapc::load             (a .kapc if it is current, else kpl::parse)
+       │    ├─ detect::compile        (the manifest + detect block -> a RuleTable)
+       │    ├─ detect::evaluate       (stat calls; no interpreter involved)
+       │    └─ .kap/cache.json        (two guards; see detect.cpp)
+       ├─ find_handler(...)       -> the primary, then any composable sidecar
+       ├─ kpl::type_check(...)    -> reject before running, not during
+       ├─ config::for_plugin(...) -> schema defaults -> layers -> --set
+       ├─ kpl::evaluate(...)      -> a CommandSpec: a list of argv arrays
+       └─ exec::run(spec, ...)    -> fork + execvp, or just print it under -n
 ```
 
-And the Milestone-3 one, which is the interesting half:
+Two properties of that picture are worth naming, because most of the design
+follows from them:
+
+**Only `exec.cpp` creates a process.** Everything above it produces *data*
+describing what should run. That is what makes `--dry-run` complete rather than
+best-effort, and it is why a plugin fetched from a git URL cannot run anything
+kap has not first rendered as an argv array it was willing to show you.
+
+**Nothing above `detect.cpp` knows any ecosystem.** Grep the binary for
+"cargo": it appears in `plugins/cargo-rust/plugin.kpl` and nowhere in `core/`.
+
+The other two chains, for orientation:
 
 ```
-main()
-  └─ "plugin test [name]"
-       └─ plugin::discover(root)      -> every <root>/plugins/*/plugin.kpl
-            └─ kapc::load(source, cache)
-                 ├─ valid .kapc?  -> kapc::decode        (skip the parser)
-                 └─ otherwise     -> kpl::parse          (and write a .kapc)
-            └─ kpl::type_check(plugin)                   (reject before running)
-            └─ for each tests/expected/*.steps.json:
-                 ├─ kpl::build_config(plugin, overrides) (schema defaults + overrides)
-                 ├─ kpl::host_project(fixture_dir)       (the §7 sandbox)
-                 ├─ kpl::evaluate(plugin, command, ...)  -> a CommandSpec
-                 └─ compare kpl::to_json(actual) with the golden file
-```
+main() -> "plugin test [name|path]"
+     └─ plugin::discover / a path argument
+     └─ kapc::load -> kpl::type_check
+     └─ for each tests/expected/*.steps.json:
+          ├─ kpl::build_config     (schema defaults + the case's overrides)
+          ├─ kpl::host_project     (the §7 sandbox, rooted at the fixture)
+          ├─ kpl::evaluate         -> a CommandSpec
+          └─ compare kpl::to_json(actual) with the golden file
 
-When you add detection or the executor, they slot into that same chain: detect
-picks *which* plugin, the executor consumes the `CommandSpec` that
-`kpl::evaluate` already produces.
+main() -> "plugin install <source>"
+     └─ registry::install                        (§6.3)
+          ├─ stage        (registry entry / git URL / local path -> a staging dir)
+          ├─ validate     (parses, manifest complete, api_version ok, type-checks)
+          ├─ checksum     (SHA-256 against the index; enforced, not advisory)
+          ├─ confirm      (§7; a non-interactive stdin means no)
+          ├─ install      (copy beside, then rename — never half-installed)
+          ├─ lockfile     (installed-plugins.toml)
+          └─ detect::invalidate_cache
+```
 
 ---
 
@@ -230,7 +263,7 @@ arrays of tables, quoted keys, and multi-line strings.
 
 The same shape as the TOML parser, for the two places the design needs JSON:
 the `CommandSpec` contract (§5.4), which `kap plugin test` compares against
-golden files, and `.kap/cache.json` (§3.2), which Milestone 4 will write.
+golden files, and `.kap/cache.json` (§3.2), which the detection engine writes.
 
 Two properties the callers depend on:
 
@@ -671,7 +704,8 @@ you commit.** If it is green, CI will be green.
 
 ## 9. Adding a feature, end to end
 
-Say you are adding `kap detect` (Milestone 4).
+Say you are adding a command like `kap detect` (which is how the detection
+engine was wired up).
 
 1. **Read the design doc section first** (§3 here). If what you want to do is
    not covered, *ask* before deciding — AGENTS.md §3. Design decisions are made
@@ -796,11 +830,13 @@ cmake --build build
 # Just the unit tests, with names
 ./build/kap_tests
 
-# Just the end-to-end tests
-./tests/e2e.sh ./build/kap 0.1.0
+# Just the end-to-end tests (the version argument must match core/version.hpp;
+# CTest passes it for you, which is why it is not a fourth copy of the number)
+./tests/e2e.sh ./build/kap 1.0.0
 
 # Plugins
-./build/kap plugin doctor --root .
+./build/kap plugin doctor --root .        # every plugin the search path finds
+./build/kap plugin doctor ./plugins/node  # or one directory, uninstalled
 ./build/kap plugin test --root .
 ./build/kap plugin test cmake-cpp --root .
 
@@ -814,9 +850,31 @@ cmake --build build-asan && ctest --test-dir build-asan --output-on-failure
 # In the container
 docker compose run --rm dev ./scripts/ci.sh
 
-# Try the binary
+# The ecosystem checks: real toolchains, real projects (needs the dev-full image)
+docker compose --profile full run --rm dev-full ./scripts/ci-full.sh
+
+# Try the binary. KAP_PLUGIN_PATH points it at the in-tree plugins without
+# installing anything.
+export KAP_PLUGIN_PATH="$PWD/plugins"
 ./build/kap --help
+./build/kap detect                 # kap's own repo is a CMake project
+./build/kap build -n               # what `kap build` would run here
+./build/kap doctor
 ./build/kap config get --root tests/fixtures/config server.host
 ```
+
+## 14. Where to look for what
+
+| Question | File |
+|---|---|
+| What are we building, and why is it shaped this way? | `docs/design.md` |
+| How do I *use* kap? | `docs/usage.md` |
+| What can go in a `kap.toml`? | `docs/configuration.md` |
+| How do I write a plugin? | `docs/plugins.md` |
+| What does this KPL keyword do? | `docs/PLUGIN_API.md` |
+| What does this bundled plugin run? | `plugins/<name>/README.md` |
+| How does the container work? | `docs/dockerusage.md` |
+| What rules must my change follow? | `AGENTS.md` |
+| How does the code work? | this file |
 
 Welcome aboard.

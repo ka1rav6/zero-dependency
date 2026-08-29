@@ -137,6 +137,11 @@ case ":$PATH:" in
         ;;
 esac
 
+case "$REPO" in
+    http://*|https://*) docs_location="$REPO/tree/$REF/docs" ;;
+    *)                  docs_location="the docs/ directory of your checkout" ;;
+esac
+
 cat <<NEXT
 
 Next:
@@ -151,5 +156,5 @@ Next:
 
     kap completions bash > ~/.local/share/bash-completion/completions/kap
 
-Docs: $REPO/tree/$REF/docs
+Docs: $docs_location
 NEXT

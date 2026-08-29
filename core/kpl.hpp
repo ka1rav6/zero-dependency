@@ -248,7 +248,7 @@ CommandSpec evaluate(const Plugin&                       plugin,
 
 // The CommandSpec <-> JSON contract from design doc §5.4. This is the shape a
 // plugin's `tests/expected/*.steps.json` golden file is written in, and the
-// shape `--dry-run` will render from in Milestone 5.
+// shape `--dry-run` renders from (core/exec.hpp).
 //
 // to_json always writes every field, including the null/empty defaults, so two
 // specs that behave identically serialize identically and can be compared as
