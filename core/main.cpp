@@ -937,15 +937,32 @@ int run_plugin_list(const kap::cli::GlobalOptions& global, const std::vector<std
         return 0;
     }
 
+    // Column widths from the data rather than a guess, so the output lines up
+    // for one plugin and for thirty. An unaligned table is readable; a table
+    // that is *nearly* aligned reads as a bug.
+    const auto version_of = [&lock](const kap::plugin::Located& located) {
+        const auto row = lock.plugins.find(located.name);
+        return row != lock.plugins.end() ? row->second.version
+                                         : kap::registry::declared_version(located.directory);
+    };
+    std::size_t name_width    = 0;
+    std::size_t version_width = 0;
+    for (const kap::plugin::Located& located : found) {
+        name_width    = std::max(name_width, located.name.size());
+        version_width = std::max(version_width, version_of(located).size());
+    }
+
     for (const kap::plugin::Located& located : found) {
         const auto        row     = lock.plugins.find(located.name);
-        const std::string version = row != lock.plugins.end()
-                                        ? row->second.version
-                                        : kap::registry::declared_version(located.directory);
+        const std::string version = version_of(located);
         const std::string origin =
             row != lock.plugins.end() ? kap::registry::origin_name(row->second.origin) : "local";
 
-        std::cout << (located.enabled ? "  " : "! ") << located.name << "  " << version << "  ["
+        // A leading '!' marks a disabled plugin, so a glance down the left edge
+        // finds the ones that will not run.
+        std::cout << (located.enabled ? "  " : "! ") << located.name
+                  << std::string(name_width - located.name.size() + 2, ' ') << version
+                  << std::string(version_width - version.size() + 2, ' ') << "["
                   << kap::plugin::source_name(located.source) << "/" << origin << "]";
         if (!located.enabled)
             std::cout << "  disabled";
@@ -954,6 +971,13 @@ int run_plugin_list(const kap::cli::GlobalOptions& global, const std::vector<std
         std::cout << "\n";
         if (global.verbose)
             std::cout << "      " << located.directory.string() << "\n";
+    }
+
+    if (global.verbose) {
+        std::cout << "\n  source: where the file was found — project, path, user, bundled, "
+                     "repo, embedded\n"
+                     "  origin: how it got there — registry, git, script, embedded, link, "
+                     "local\n";
     }
     return 0;
 }

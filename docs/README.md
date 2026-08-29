@@ -20,6 +20,7 @@ ecosystem means writing one text file, not rebuilding kap.
 | If you want to… | Read |
 |---|---|
 | Install kap and start using it | **[usage.md](usage.md)** |
+| Look up one command, exhaustively | **[commands.md](commands.md)** |
 | Change what a plugin does for your project | **[configuration.md](configuration.md)** |
 | Write a plugin for an ecosystem kap does not know | **[plugins.md](plugins.md)** |
 | Look up a KPL keyword, builtin, or type | **[PLUGIN_API.md](PLUGIN_API.md)** |
@@ -82,4 +83,12 @@ $ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 $ cmake --build build
 
 $ kap build                   # do it
+```
+
+Every command has a page in the terminal too:
+
+```console
+$ kap help                    # the index
+$ kap install --help          # one command
+$ kap help plugin install     # subcommands too
 ```

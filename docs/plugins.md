@@ -18,7 +18,7 @@ keyword, see [PLUGIN_API.md](PLUGIN_API.md).
 - [Testing without running anything](#testing-without-running-anything)
 - [The development loop](#the-development-loop)
 - [Installing and sharing](#installing-and-sharing)
-- [Publishing to a registry](#publishing-to-a-registry)
+- [Publishing](#publishing)
 - [What plugins cannot do](#what-plugins-cannot-do)
 - [Recipes](#recipes)
 - [Mistakes worth avoiding](#mistakes-worth-avoiding)
@@ -385,7 +385,124 @@ passes `--yes`.
 
 ---
 
-## Publishing to a registry
+## Publishing
+
+There are three ways to let other people install your plugin, in increasing
+order of effort.
+
+### 1. A git repository — nothing to write
+
+If your plugin is at the root of a repository, that is already enough:
+
+```sh
+kap plugin install https://github.com/you/kap-zig
+```
+
+kap clones it shallowly, validates it, and installs. Nothing else required.
+
+### 2. An installer script — one file, and no git needed
+
+An installer script is a URL kap downloads and runs. It is worth the extra file
+for two reasons: it needs only `curl` or `wget` on the user's machine rather
+than a working git, and it downloads two text files rather than a whole
+repository.
+
+```sh
+kap plugin install https://raw.githubusercontent.com/you/kap-zig/main/install.sh
+```
+
+**The contract.** kap runs your script with `/bin/sh` in a staging directory it
+created, and gives you four things:
+
+| | |
+|---|---|
+| the working directory | the staging directory |
+| `$KAP_PLUGIN_DEST` | its absolute path — write `plugin.kpl` here |
+| `$KAP_PLUGIN_NAME` | the name kap was asked for, or empty |
+| `$KAP_VERSION` | the running kap's version |
+
+Your script's whole job is to put files in `$KAP_PLUGIN_DEST`. It decides
+nothing: whatever it leaves behind goes through the same parse, manifest,
+`api_version`, detect-rule, and type check as every other install, and kap
+refuses the install if any of that fails. A script that writes rubbish produces
+a refused install, not a broken kap.
+
+The simplest useful one — it downloads the two files that make up a plugin:
+
+```sh
+#!/usr/bin/env sh
+# install.sh — install the zig plugin for kap.
+#
+# Run by `kap plugin install https://.../install.sh`, or by hand:
+#     curl -fsSL https://.../install.sh | KAP_PLUGIN_DEST=./zig sh
+set -eu
+
+BASE="https://raw.githubusercontent.com/you/kap-zig/main"
+DEST="${KAP_PLUGIN_DEST:?kap sets this; set it yourself to run by hand}"
+
+fetch() {
+    # --fail matters: without it curl writes the 404 page to the output file
+    # and exits 0, and you install an HTML error page.
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --proto '=https' -o "$2" "$1"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
+
+mkdir -p "$DEST"
+fetch "$BASE/plugin.kpl" "$DEST/plugin.kpl"
+fetch "$BASE/README.md"  "$DEST/README.md" || true   # optional
+```
+
+Or, if your plugin is small enough, skip the network entirely and write it
+inline — a complete plugin is one file:
+
+```sh
+#!/usr/bin/env sh
+set -eu
+cat > "${KAP_PLUGIN_DEST:?}/plugin.kpl" <<'KPL'
+manifest { name = "zig" version = "1.0.0" api_version = 1 priority = 35 }
+detect   { file_exists "build.zig" }
+requires { any_of [zig] }
+schema   { release: bool = false }
+
+command build(project, config, extra) {
+  let flags = if config.release then ["-Doptimize=ReleaseSafe"] else []
+  step ["zig", "build"] + flags + extra
+}
+KPL
+```
+
+**What your users see** before it runs — kap does not run a downloaded script
+without asking:
+
+```console
+run an installer script from the network
+  url:      https://raw.githubusercontent.com/you/kap-zig/main/install.sh
+  size:     461 bytes
+  sha256:   93f8c0f7f8b3a235deeed17c4e5e7c9564ba15bbce59488a2295e62456bc3a86
+  saved at: /home/them/.cache/kap/plugins-src/install.staging.install.sh
+
+  This script runs as you, with your permissions. Read it before saying
+  yes if you did not write it. kap will still validate whatever it
+  produces before installing anything.
+
+Proceed? [y/N]
+```
+
+**HTTPS only.** kap executes what it downloads, so a plain-HTTP URL is refused —
+anyone on the path between your user and your server could replace it. (Plain
+HTTP to loopback is allowed, which is how you test your script locally.)
+
+Testing yours without publishing anything:
+
+```sh
+python3 -m http.server 8000 &     # serving the directory with install.sh
+kap plugin install http://127.0.0.1:8000/install.sh
+```
+
+### 3. A registry — one entry, for discoverability
 
 A registry is a git repository with an `index.toml`. No server.
 
@@ -393,19 +510,26 @@ A registry is a git repository with an `index.toml`. No server.
 [plugins.zig]
 description = "Build and test Zig projects"
 version = "1.0.0"
-url = "https://github.com/you/kap-plugins"
-ref = "v1.0.0"
-subdir = "zig"
-checksum = "sha256:…"
 tags = ["zig", "build"]
+
+# Either an installer script...
+install_script = "https://raw.githubusercontent.com/you/kap-zig/main/install.sh"
+
+# ...or a git remote. An entry needs at least one; the script wins when both
+# are present, because it needs only curl rather than a working git.
+url = "https://github.com/you/kap-zig"
+ref = "v1.0.0"
+subdir = ""
+
+checksum = "sha256:…"
 ```
 
 `checksum` is SHA-256 over the plugin's files — every regular file under the
 directory in sorted path order, with the paths themselves folded in and `.git`
-excluded. It is **enforced**: a payload whose digest does not match causes the
-install to fail, not to warn.
+excluded. It is **enforced**: a payload whose digest does not match fails the
+install rather than warning.
 
-To find the digest, install once without a checksum and read it back:
+To find the digest, install once without one and read it back:
 
 ```console
 $ kap plugin install ./zig --yes
@@ -414,7 +538,7 @@ checksum = "sha256:8cc58f2f…"
 ```
 
 Point kap at your registry with `KAP_REGISTRY=/path/to/index.toml`, and users
-find it with `kap plugin search`.
+find your plugin with `kap plugin search`.
 
 A bundle installs several at once:
 
@@ -424,12 +548,24 @@ description = "Zig and its friends"
 plugins = ["zig", "zls"]
 ```
 
-What the checksum does and does not buy, stated plainly: it proves the payload
+**What a checksum does and does not buy**, stated plainly: it proves the payload
 is what the index author recorded, so a compromised mirror or a truncated
-download is caught. It says nothing about whether the plugin is *safe*. That is
-why installing shows a summary and asks.
+download is caught. It says nothing about whether the plugin is *safe to run*.
+That is why installing shows a summary and asks.
 
----
+### Sharing without publishing at all
+
+For a team, the simplest answer is usually none of the above. Commit the plugin
+into the repository it serves:
+
+```sh
+kap plugin install --project ./my-plugin     # lands in ./.kap/plugins/
+git add .kap/plugins/my-plugin
+```
+
+Everyone who clones the repository gets the plugin, with nothing to install and
+no registry to maintain. Project-local plugins take precedence over installed
+ones of the same name.
 
 ## What plugins cannot do
 

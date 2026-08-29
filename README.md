@@ -36,6 +36,13 @@ Clones, builds, **runs the test suite**, and installs the binary together with
 eight plugins and the registry index. A build that fails its own tests is not
 installed. Needs `git`, `cmake`, and a C++20 compiler.
 
+For a **single self-contained binary** — plugins compiled in, works with
+nothing beside it and no network:
+
+```sh
+curl -fsSL .../install.sh | KAP_EMBED=1 sh
+```
+
 From source:
 
 ```sh
@@ -43,6 +50,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix ~/.local
+
+# ...or self-contained
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAP_EMBED_PLUGINS=ON
 ```
 
 ---
@@ -50,6 +60,7 @@ cmake --install build --prefix ~/.local
 ## Five commands worth knowing
 
 ```sh
+kap help          # every command, each with its own page
 kap detect        # which plugin claims this directory, and which files made it match
 kap doctor        # are the tools this project needs actually installed
 kap build -n      # exactly what `kap build` would run, without running it
@@ -122,7 +133,8 @@ than best-effort.
 | | |
 |---|---|
 | [docs/README.md](docs/README.md) | Index |
-| [docs/usage.md](docs/usage.md) | Every command and flag |
+| [docs/usage.md](docs/usage.md) | The guided tour |
+| [docs/commands.md](docs/commands.md) | Exhaustive reference: every command, flag, and exit code |
 | [docs/configuration.md](docs/configuration.md) | `kap.toml`, the layers, hooks |
 | [docs/plugins.md](docs/plugins.md) | Writing, testing, installing, publishing a plugin |
 | [docs/PLUGIN_API.md](docs/PLUGIN_API.md) | KPL reference and grammar |

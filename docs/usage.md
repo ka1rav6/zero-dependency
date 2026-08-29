@@ -1,8 +1,17 @@
 # Using kap
 
-Everything the command line does. For the shape of a `kap.toml`, see
-[configuration.md](configuration.md); for writing your own plugin, see
-[plugins.md](plugins.md).
+The guided tour. For an exhaustive, command-by-command reference — every flag,
+every exit code, every file — see **[commands.md](commands.md)**, or ask the
+binary:
+
+```sh
+kap help                  # the index
+kap <command> --help      # one command's full page
+kap help plugin install   # subcommands too
+```
+
+For the shape of a `kap.toml`, see [configuration.md](configuration.md); for
+writing your own plugin, [plugins.md](plugins.md).
 
 ---
 
@@ -33,6 +42,17 @@ Everything the command line does. For the shape of a `kap.toml`, see
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kap-project/kap/main/scripts/install.sh | sh
 ```
+
+For a **single self-contained binary** — the plugins compiled in, nothing
+needed beside it, no network ever:
+
+```sh
+curl -fsSL .../install.sh | KAP_EMBED=1 sh
+```
+
+That is the one to use if you will copy `kap` to a server, into a container, or
+onto a machine you do not administer. The default installs the plugins as text
+files next to the binary, which is what a distribution package wants.
 
 It clones the repository, builds, **runs the test suite**, and installs into
 `~/.local` — the binary, the eight bundled plugins, and the registry index. A
