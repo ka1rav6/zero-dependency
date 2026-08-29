@@ -400,6 +400,59 @@ std::uintmax_t total_usage(const std::vector<std::filesystem::path>& paths)
 
 } // namespace
 
+std::string find_url(std::string_view text)
+{
+    for (const std::string_view scheme :
+         {std::string_view("https://"), std::string_view("http://")}) {
+        const std::size_t start = text.find(scheme);
+        if (start == std::string_view::npos)
+            continue;
+
+        std::size_t end = start;
+        while (end < text.size()) {
+            const unsigned char ch = static_cast<unsigned char>(text[end]);
+            // Stop at whitespace, at a control character, and at the quotes and
+            // brackets tools wrap URLs in. Everything else is fair game — a URL
+            // may legitimately contain '?', '&', '#', and '='.
+            if (ch <= ' ' || ch == 0x7F || ch == '"' || ch == '\'' || ch == '<' || ch == '>' ||
+                ch == '`' || ch == ')' || ch == ']')
+                break;
+            ++end;
+        }
+
+        // Trailing sentence punctuation is almost never part of the URL:
+        // "serving at http://localhost:3000." is a sentence, not a path.
+        while (end > start && (text[end - 1] == '.' || text[end - 1] == ',' ||
+                               text[end - 1] == ';' || text[end - 1] == ':'))
+            --end;
+
+        // "https://" alone is a scheme, not a URL.
+        if (end - start > scheme.size())
+            return std::string(text.substr(start, end - start));
+    }
+    return {};
+}
+
+bool open_url(const std::string& url)
+{
+    // Two candidates, tried in order: xdg-open is the freedesktop standard,
+    // `open` is macOS. Neither being present is a normal outcome on a headless
+    // machine, not an error worth failing the dev loop over.
+    for (const char* opener : {"xdg-open", "open"}) {
+        Child child =
+            spawn_process({opener, url}, std::nullopt, {}, std::filesystem::current_path(), false);
+        if (child.spawn_failed)
+            continue;
+
+        // Deliberately not waited on. A browser can take seconds to start, and
+        // blocking the dev loop on it would be worse than the zombie this
+        // leaves — which the process reaps at exit anyway, since kap does not
+        // outlive the dev session.
+        return true;
+    }
+    return false;
+}
+
 bool default_color()
 {
     // Two gates, both necessary. isatty answers "would anyone see colour" — a
@@ -522,7 +575,10 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
 
     SignalGuard guard;
 
-    if (spec.concurrent && spec.steps.size() > 1) {
+    // -o has to read the output to find a URL in it, so it takes the capturing
+    // path even for a single step that would otherwise inherit the terminal.
+    if ((spec.concurrent && spec.steps.size() > 1) ||
+        (options.open_first_url && !spec.steps.empty())) {
         // --- concurrent (§3.3, §5.11: `kap dev`) -----------------------------
         std::vector<Child> children;
         children.reserve(spec.steps.size());
@@ -537,6 +593,8 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
                 track_child(child.pid);
             children.push_back(std::move(child));
         }
+
+        bool opened_a_url = false;
 
         // Multiplex every child's pipe with poll(2). One loop in one thread:
         // no thread ever exists while a fork is in flight, which is what keeps
@@ -571,9 +629,29 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
                 std::array<char, 4096> buffer;
                 const ssize_t          got = ::read(child.output_fd, buffer.data(), buffer.size());
                 if (got > 0) {
-                    emit_labelled(child,
-                                  std::string_view(buffer.data(), static_cast<std::size_t>(got)),
-                                  options);
+                    const std::string_view chunk(buffer.data(), static_cast<std::size_t>(got));
+                    if (options.open_first_url && !opened_a_url) {
+                        // Scan the chunk *together with* whatever partial line
+                        // is still pending, so a URL split across two reads is
+                        // still found. Reads land on arbitrary boundaries; a
+                        // dev server's banner arriving in two pieces is
+                        // ordinary, not exotic.
+                        const std::string candidate = child.pending + std::string(chunk);
+                        const std::string url       = find_url(candidate);
+                        if (!url.empty()) {
+                            opened_a_url = true;
+                            const bool launched =
+                                options.open_url ? options.open_url(url) : open_url(url);
+                            if (launched) {
+                                out_stream(options) << "kap: opened " << url << "\n";
+                            } else {
+                                out_stream(options)
+                                    << "kap: found " << url
+                                    << " but neither xdg-open nor open is available\n";
+                            }
+                        }
+                    }
+                    emit_labelled(child, chunk, options);
                 } else if (got == 0 || (got < 0 && errno != EINTR && errno != EAGAIN)) {
                     flush_pending(child, options);
                     ::close(child.output_fd);

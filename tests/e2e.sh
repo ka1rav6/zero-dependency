@@ -646,7 +646,7 @@ expect_status "plugin with no subcommand shows usage and exits 2" 2 plugin
 expect_stderr_contains "plugin usage lists the subcommands" "install <name|url|path>" plugin
 expect_status "an unknown plugin subcommand exits 2" 2 plugin frobnicate
 expect_stderr_contains "an unknown plugin subcommand names the alternatives" \
-    "list, search, install" plugin frobnicate
+    "list search install" plugin frobnicate
 expect_status "plugin doctor accepts several names at once" 0 \
     plugin doctor cargo-rust cmake-cpp --root "$repo_root"
 
@@ -728,6 +728,87 @@ else
 fi
 
 rm -rf "$pm_dir"
+
+# --- shell completions (Milestone 10) ----------------------------------------------
+#
+# The unit tests check the scripts mention the right words. Only here can they
+# be handed to a real shell, which is the assertion that actually matters: a
+# completion script with a syntax error is worse than none, because it makes
+# every Tab in that shell print an error.
+
+comp_dir="$(mktemp -d)"
+
+expect_status "completions with no shell exits 2" 2 completions
+expect_status "completions with an unknown shell exits 1" 1 completions csh
+expect_stderr_contains "an unknown shell lists the real ones" "bash zsh fish" completions csh
+
+for shell_name in bash zsh fish; do
+    expect_status "completions $shell_name exits 0" 0 completions "$shell_name"
+    "$kap_bin" completions "$shell_name" > "$comp_dir/$shell_name" 2>/dev/null
+    if [ -s "$comp_dir/$shell_name" ]; then
+        pass "completions $shell_name writes a non-empty script"
+    else
+        fail "completions $shell_name writes a non-empty script" "empty output"
+    fi
+done
+
+# bash is always present (this script is running under it).
+if bash -n "$comp_dir/bash" 2>/dev/null; then
+    pass "the bash completion script parses"
+else
+    fail "the bash completion script parses" "$(bash -n "$comp_dir/bash" 2>&1)"
+fi
+
+# Sourcing it and driving the completion function is the real end-to-end check.
+completion_out="$(bash -c "source '$comp_dir/bash'; COMP_WORDS=(kap plugin ins); COMP_CWORD=2; _kap; printf '%s\n' \"\${COMPREPLY[@]}\"" 2>/dev/null)"
+if [ "$completion_out" = "install" ]; then
+    pass "the bash completion actually completes a subcommand"
+else
+    fail "the bash completion actually completes a subcommand" "got '$completion_out'"
+fi
+
+if command -v zsh >/dev/null 2>&1; then
+    if zsh -n "$comp_dir/zsh" 2>/dev/null; then
+        pass "the zsh completion script parses"
+    else
+        fail "the zsh completion script parses" "$(zsh -n "$comp_dir/zsh" 2>&1)"
+    fi
+else
+    printf '[SKIP] the zsh completion script parses (zsh not installed)\n'
+fi
+
+if command -v fish >/dev/null 2>&1; then
+    if fish -n "$comp_dir/fish" 2>/dev/null; then
+        pass "the fish completion script parses"
+    else
+        fail "the fish completion script parses" "$(fish -n "$comp_dir/fish" 2>&1)"
+    fi
+else
+    printf '[SKIP] the fish completion script parses (fish not installed)\n'
+fi
+
+rm -rf "$comp_dir"
+
+# --- kap dev -o (Milestone 10) -------------------------------------------------------
+
+dev_dir="$(mktemp -d)"
+export KAP_PLUGIN_PATH="$repo_root/plugins"
+cat > "$dev_dir/package.json" <<'JSON'
+{
+  "name": "kap-e2e-dev",
+  "private": true,
+  "scripts": { "dev": "echo Local: http://127.0.0.1:59999/" }
+}
+JSON
+
+# -o is a `dev` option, so it must be accepted there...
+expect_status "dev accepts -o" 0 dev -n --root "$dev_dir" -o
+expect_status "dev accepts --open" 0 dev -n --root "$dev_dir" --open
+# ...and refused everywhere else, since it means nothing for a one-shot command.
+expect_status "build refuses -o" 2 build -n --root "$dev_dir" -o
+
+rm -rf "$dev_dir"
+unset KAP_PLUGIN_PATH
 
 # --- summary ----------------------------------------------------------------------
 

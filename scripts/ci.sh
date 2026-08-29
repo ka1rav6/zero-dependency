@@ -51,6 +51,40 @@ case "$detected" in
     *) echo "ci.sh: expected detect to resolve cmake-cpp, got '$detected'" >&2; exit 1 ;;
 esac
 
+echo "== install ========================================================"
+# Design doc §6.5 tier three: an installed kap must find its own bundled plugins
+# and registry from its own location, with no environment variables and no
+# configuration. Verified by installing into a scratch prefix and running the
+# result with an empty environment — which is also the closest thing to what a
+# user gets from scripts/install.sh.
+install_prefix="$(mktemp -d)"
+cmake --install build --prefix "$install_prefix" >/dev/null
+env -i "$install_prefix/bin/kap" --version >/dev/null
+bundled="$(env -i "$install_prefix/bin/kap" plugin list | wc -l | tr -d " ")"
+if [ "$bundled" -lt 8 ]; then
+    echo "ci.sh: an installed kap found only $bundled bundled plugins" >&2
+    exit 1
+fi
+env -i "$install_prefix/bin/kap" plugin search cmake >/dev/null
+echo "ci.sh: installed kap sees $bundled bundled plugins with an empty environment"
+rm -rf "$install_prefix"
+
+echo "== completions ===================================================="
+# A completion script with a syntax error is worse than none: it makes every
+# Tab in that shell print an error.
+./build/kap completions bash > /tmp/kap-ci-completion.bash
+bash -n /tmp/kap-ci-completion.bash
+rm -f /tmp/kap-ci-completion.bash
+./build/kap completions zsh >/dev/null
+./build/kap completions fish >/dev/null
+
+echo "== install script ================================================="
+# Only a syntax check here: actually running it clones and rebuilds, which the
+# rest of this script has already done. `sh -n` still catches the class of
+# mistake that matters most for a script people pipe into a shell.
+sh -n scripts/install.sh
+bash -n scripts/ci-full.sh
+
 echo "== smoke tests ===================================================="
 # Milestone-0 contract: version banner, help, and a loud failure for any
 # command we do not know yet.

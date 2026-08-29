@@ -475,3 +475,140 @@ KAP_TEST("report_freed_space reports zero rather than a negative number")
 
     std::filesystem::remove_all(root);
 });
+
+// --- find_url (Milestone 10: `kap dev -o`) --------------------------------------------
+//
+// The URL a dev server prints is the one line you always act on. Getting the
+// boundaries right matters more than it looks: opening a URL with a sentence's
+// full stop attached, or with a closing quote, produces a 404 rather than the
+// app.
+
+KAP_TEST("find_url picks a URL out of a line of tool output")
+{
+    KAP_ASSERT_EQ(kap::exec::find_url("  Local:   http://localhost:5173/"),
+                  std::string("http://localhost:5173/"));
+    KAP_ASSERT_EQ(kap::exec::find_url("Listening on https://127.0.0.1:8443/app?x=1&y=2"),
+                  std::string("https://127.0.0.1:8443/app?x=1&y=2"));
+});
+
+KAP_TEST("find_url prefers https when a line offers both")
+{
+    // Tools that print both usually print the http one as a fallback note.
+    KAP_ASSERT_EQ(kap::exec::find_url("http://a.example/ or https://b.example/"),
+                  std::string("https://b.example/"));
+});
+
+KAP_TEST("find_url stops at whitespace and at wrapping punctuation")
+{
+    KAP_ASSERT_EQ(kap::exec::find_url("open http://localhost:3000 now"),
+                  std::string("http://localhost:3000"));
+    KAP_ASSERT_EQ(kap::exec::find_url("see \"http://localhost:3000\" for details"),
+                  std::string("http://localhost:3000"));
+    KAP_ASSERT_EQ(kap::exec::find_url("ready (http://localhost:3000)"),
+                  std::string("http://localhost:3000"));
+    KAP_ASSERT_EQ(kap::exec::find_url("[http://localhost:3000]"),
+                  std::string("http://localhost:3000"));
+});
+
+KAP_TEST("find_url drops trailing sentence punctuation")
+{
+    // "serving at http://localhost:3000." is a sentence, not a path.
+    KAP_ASSERT_EQ(kap::exec::find_url("serving at http://localhost:3000."),
+                  std::string("http://localhost:3000"));
+    KAP_ASSERT_EQ(kap::exec::find_url("try http://localhost:3000, or the other one"),
+                  std::string("http://localhost:3000"));
+});
+
+KAP_TEST("find_url finds nothing when there is nothing to find")
+{
+    KAP_ASSERT_EQ(kap::exec::find_url(""), std::string(""));
+    KAP_ASSERT_EQ(kap::exec::find_url("compiling 42 modules"), std::string(""));
+    // A bare scheme is not a URL.
+    KAP_ASSERT_EQ(kap::exec::find_url("the https:// scheme"), std::string(""));
+});
+
+KAP_TEST("find_url handles a URL at the very start and the very end of a line")
+{
+    KAP_ASSERT_EQ(kap::exec::find_url("http://a.example/x"), std::string("http://a.example/x"));
+    KAP_ASSERT_EQ(kap::exec::find_url("go to http://a.example/x"),
+                  std::string("http://a.example/x"));
+});
+
+KAP_TEST("open_first_url captures output and opens the URL a step printed")
+{
+    // -o forces the capturing path even for a single step, because kap cannot
+    // read what it did not capture.
+    //
+    // Options::open_url is replaced so the test records the URL instead of
+    // launching a browser. Without that seam this test really did open browser
+    // windows on the machine running it — which is how the seam came to exist.
+    Captured                 captured;
+    std::vector<std::string> opened;
+    captured.options.open_first_url = true;
+    captured.options.open_url       = [&opened](const std::string& url) {
+        opened.push_back(url);
+        return true;
+    };
+
+    const kap::exec::Outcome outcome =
+        kap::exec::run(spec_of({step({"/bin/sh", "-c", "echo Local: http://127.0.0.1:60123/"})}),
+                       captured.options);
+
+    KAP_ASSERT(outcome.ok());
+    KAP_ASSERT_EQ(opened.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(opened.front(), std::string("http://127.0.0.1:60123/"));
+    KAP_ASSERT(captured.out.str().find("kap: opened") != std::string::npos);
+});
+
+KAP_TEST("open_first_url opens at most one URL, however many are printed")
+{
+    Captured                 captured;
+    std::vector<std::string> opened;
+    captured.options.open_first_url = true;
+    captured.options.open_url       = [&opened](const std::string& url) {
+        opened.push_back(url);
+        return true;
+    };
+
+    (void) kap::exec::run(
+        spec_of({step({"/bin/sh",
+                       "-c",
+                       "echo http://127.0.0.1:60001/; sleep 0.05; echo http://127.0.0.1:60002/"})}),
+        captured.options);
+
+    KAP_ASSERT_EQ(opened.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(opened.front().find("60001") != std::string::npos);
+});
+
+KAP_TEST("open_first_url reports honestly when no opener is available")
+{
+    // "found it but could not open it" is a different fact from "opened it",
+    // and saying the wrong one sends someone looking at their browser.
+    Captured captured;
+    captured.options.open_first_url = true;
+    captured.options.open_url       = [](const std::string&) { return false; };
+
+    (void) kap::exec::run(spec_of({step({"/bin/sh", "-c", "echo http://127.0.0.1:60123/"})}),
+                          captured.options);
+
+    KAP_ASSERT(captured.out.str().find("kap: found") != std::string::npos);
+    KAP_ASSERT(captured.out.str().find("kap: opened") == std::string::npos);
+});
+
+KAP_TEST("open_first_url without a URL opens nothing")
+{
+    Captured                 captured;
+    std::vector<std::string> opened;
+    captured.options.open_first_url = true;
+    captured.options.open_url       = [&opened](const std::string& url) {
+        opened.push_back(url);
+        return true;
+    };
+
+    const kap::exec::Outcome outcome =
+        kap::exec::run(spec_of({step({"/bin/sh", "-c", "echo just building"})}), captured.options);
+
+    KAP_ASSERT(outcome.ok());
+    KAP_ASSERT(opened.empty());
+    KAP_ASSERT(captured.out.str().find("just building") != std::string::npos);
+});

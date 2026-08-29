@@ -104,6 +104,7 @@ add_library(kap_core STATIC
     core/exec.cpp
     core/config.cpp
     core/registry.cpp
+    core/completions.cpp
     core/plugin.cpp
     core/detect.cpp
 )
@@ -113,6 +114,35 @@ target_include_directories(kap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 # --- kap binary ---------------------------------------------------------------
 add_executable(kap core/main.cpp)
 target_link_libraries(kap PRIVATE kap_core)
+
+# --- Installation ---------------------------------------------------------------
+# `cmake --install build --prefix <prefix>` lays out what design doc §6.5's
+# third tier expects:
+#
+#     <prefix>/bin/kap
+#     <prefix>/share/kap/plugins/<name>/     the bundled first-party plugins
+#     <prefix>/share/kap/registry/index.toml the registry index
+#
+# The binary finds those at run time by reading /proc/self/exe and going up two
+# levels (core/paths.cpp), so an installed kap needs no configuration and no
+# environment variables to see its own plugins. Moving the whole prefix
+# somewhere else keeps working, which is what makes a relocatable tarball and a
+# `curl | sh` install possible.
+include(GNUInstallDirs)
+
+install(TARGETS kap RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+# Only the plugin's own files, never its test fixtures: those are for plugin
+# authors and would roughly double what an install writes for no user benefit.
+install(DIRECTORY plugins/
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kap/plugins"
+        FILES_MATCHING
+        PATTERN "*.kpl"
+        PATTERN "README.md"
+        PATTERN "tests" EXCLUDE)
+
+install(FILES registry/index.toml
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/kap/registry")
 
 # --- Tests ---------------------------------------------------------------------
 # In-tree, zero-dependency test harness design doc §9 mandates (no Catch2 /
@@ -138,6 +168,7 @@ add_executable(
     tests/test_config.cpp
     tests/test_sha256.cpp
     tests/test_registry.cpp
+    tests/test_completions.cpp
     tests/test_version.cpp
 )
 target_link_libraries(kap_tests PRIVATE kap_core)

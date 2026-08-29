@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "core/cli.hpp"
+#include "core/completions.hpp"
 #include "core/config.hpp"
 #include "core/detect.hpp"
 #include "core/diag.hpp"
@@ -61,6 +62,7 @@ void print_usage(std::ostream& out)
            "  ci         fmt-check + lint + test, or whatever the plugin defines\n"
            "  clean      remove build output\n"
            "  dev        run the development loop (may run steps concurrently)\n"
+           "             -o / --open opens the first URL a step prints\n"
            "  doctor     check that the tools the project needs are installed\n"
            "  fmt        format the source\n"
            "  install    install the project\n"
@@ -75,6 +77,7 @@ void print_usage(std::ostream& out)
            "  config set <key> <value>  write one value to ./kap.toml\n"
            "  config edit               open a configuration file in $EDITOR\n"
            "  plugin ...                manage plugins ('kap plugin' for the list)\n"
+           "  completions <shell>       print a bash, zsh, or fish completion script\n"
            "\n"
            "global flags:\n"
            "  -n, --dry-run      print the commands instead of running them\n"
@@ -223,6 +226,25 @@ const std::vector<std::string>& project_commands()
                                                       "run",
                                                       "test"};
     return commands;
+}
+
+// The `kap plugin` subcommands (§6.1). Kept as a function rather than repeated
+// in three completion scripts and one usage banner, so adding a subcommand
+// cannot leave any of them behind.
+const std::vector<std::string>& plugin_subcommands()
+{
+    static const std::vector<std::string> subcommands = {"list",
+                                                         "search",
+                                                         "install",
+                                                         "remove",
+                                                         "update",
+                                                         "enable",
+                                                         "disable",
+                                                         "pin",
+                                                         "new",
+                                                         "test",
+                                                         "doctor"};
+    return subcommands;
 }
 
 bool is_project_command(const std::string& name)
@@ -511,7 +533,8 @@ int dispatch_one(const Session&                                session,
                  const std::string&                            command,
                  const kap::cli::GlobalOptions&                global,
                  const std::vector<std::string>&               extra,
-                 const std::map<std::string, kap::kpl::Value>& injected = {})
+                 const std::map<std::string, kap::kpl::Value>& injected       = {},
+                 bool                                          open_first_url = false)
 {
     std::vector<std::string>          available;
     const std::optional<LoadedPlugin> loaded = find_handler(session, command, available);
@@ -552,7 +575,8 @@ int dispatch_one(const Session&                                session,
     if (!spec)
         return 1;
 
-    const kap::exec::Options options = executor_options(global, session.resolution.root);
+    kap::exec::Options options = executor_options(global, session.resolution.root);
+    options.open_first_url     = open_first_url;
 
     if (const int hook_status = run_hook_phase(session, "pre", command, options); hook_status != 0)
         return hook_status;
@@ -624,15 +648,28 @@ int dispatch_ci(const Session&                  session,
 // `kap <command>` for every command in §8's table.
 int run_project_command(const std::string& command, const kap::cli::Invocation& inv)
 {
-    if (!inv.argv.empty()) {
+    // `kap dev -o` opens the first URL a dev server prints (§ Milestone 10).
+    // It is a `dev` option rather than a global flag because it only means
+    // anything for a long-running command that prints a URL.
+    bool                     open_first_url = false;
+    std::vector<std::string> remaining;
+    for (const std::string& argument : inv.argv) {
+        if (command == "dev" && (argument == "-o" || argument == "--open")) {
+            open_first_url = true;
+            continue;
+        }
+        remaining.push_back(argument);
+    }
+
+    if (!remaining.empty()) {
         // Arguments for the *underlying tool* go after `--` (§4: `kap build --
         // --release`). Accepting them bare would make `kap build --release`
         // and `kap build -- --release` both work but mean different things the
         // day kap grows a `--release` of its own.
-        std::cerr << "kap: error: unexpected argument '" << inv.argv.front() << "'\n"
+        std::cerr << "kap: error: unexpected argument '" << remaining.front() << "'\n"
                   << "      note: arguments for the underlying tool go after '--':\n"
                   << "      note:     kap " << command << " --";
-        for (const std::string& argument : inv.argv)
+        for (const std::string& argument : remaining)
             std::cerr << ' ' << argument;
         std::cerr << "\n";
         return 2;
@@ -662,7 +699,7 @@ int run_project_command(const std::string& command, const kap::cli::Invocation& 
     const std::map<std::string, kap::kpl::Value> injected =
         command == "doctor" ? doctor_injection(session) : std::map<std::string, kap::kpl::Value>{};
 
-    return dispatch_one(session, command, inv.global, inv.passthrough, injected);
+    return dispatch_one(session, command, inv.global, inv.passthrough, injected, open_first_url);
 }
 
 // --- the plugin manager CLI (design doc §6.1, Milestone 7) ---------------------------
@@ -1339,6 +1376,44 @@ int run_plugin_test(const kap::cli::GlobalOptions& global, const std::vector<std
     return failed == 0 ? 0 : 1;
 }
 
+// `kap completions <shell>` — design doc Milestone 10.
+//
+// The script is generated rather than shipped as a file, because the command
+// lists it completes live in this file: a checked-in script is a second copy
+// that drifts the first time somebody adds a subcommand.
+int run_completions(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    (void) global;
+    const std::vector<std::string> supported = kap::completions::shells();
+
+    if (args.size() != 1) {
+        std::cerr << "kap: usage: kap completions <";
+        for (std::size_t index = 0; index < supported.size(); ++index)
+            std::cerr << (index == 0 ? "" : "|") << supported[index];
+        std::cerr << ">\n"
+                     "      note: bash:  kap completions bash > "
+                     "~/.local/share/bash-completion/completions/kap\n"
+                     "      note: zsh:   kap completions zsh  > \"${fpath[1]}/_kap\"\n"
+                     "      note: fish:  kap completions fish > "
+                     "~/.config/fish/completions/kap.fish\n";
+        return 2;
+    }
+
+    const std::string text =
+        kap::completions::script(args[0], project_commands(), plugin_subcommands());
+    if (text.empty()) {
+        std::cerr << "kap: error: no completion script for '" << args[0] << "'\n"
+                  << "      note: expected one of:";
+        for (const std::string& shell : supported)
+            std::cerr << ' ' << shell;
+        std::cerr << "\n";
+        return 1;
+    }
+
+    std::cout << text;
+    return 0;
+}
+
 // `kap plugin <subcommand> ...` — design doc §6.1. As with `kap config`,
 // an unknown subcommand is refused rather than silently treated as one of the
 // implemented ones.
@@ -1389,8 +1464,10 @@ int run_plugin(const kap::cli::GlobalOptions& global, const std::vector<std::str
         return run_plugin_new(global, rest);
 
     std::cerr << "kap: error: unknown subcommand 'plugin " << subcommand << "'\n"
-              << "      note: expected one of: list, search, install, remove, update,\n"
-              << "      note:                  enable, disable, pin, new, test, doctor\n";
+              << "      note: expected one of:";
+    for (const std::string& name : plugin_subcommands())
+        std::cerr << ' ' << name;
+    std::cerr << "\n";
     return 2;
 }
 
@@ -1710,6 +1787,9 @@ int main(int argc, char** argv)
         if (inv.command == "plugin") {
             return run_plugin(inv.global, inv.argv);
         }
+        if (inv.command == "completions") {
+            return run_completions(inv.global, inv.argv);
+        }
         if (is_project_command(inv.command)) {
             return run_project_command(inv.command, inv);
         }
@@ -1721,7 +1801,7 @@ int main(int argc, char** argv)
                   << "      note: project commands:";
         for (const std::string& name : project_commands())
             std::cerr << ' ' << name;
-        std::cerr << "\n      note: kap commands: config detect plugin\n";
+        std::cerr << "\n      note: kap commands: config completions detect plugin\n";
         return 2;
     }
     catch (const kap::diag::Error& e) {

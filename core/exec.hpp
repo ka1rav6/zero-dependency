@@ -40,6 +40,7 @@
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <map>
 #include <string>
@@ -91,6 +92,26 @@ struct Options
     // stdout is a terminal"; see `default_color()`.
     bool color = false;
 
+    // `kap dev -o`: open the first URL any step prints, once (design doc
+    // Milestone 10). A dev server's "Local: http://localhost:5173/" is the one
+    // line you always act on, and this saves the round trip through the mouse.
+    //
+    // It forces every step's output through a pipe, because kap cannot read
+    // what it did not capture. That costs the inherited terminal, so a tool
+    // that checks isatty() will drop its colours. The trade is stated here
+    // rather than hidden: pass -o when you want the browser, leave it off when
+    // you want the prettier output.
+    bool open_first_url = false;
+
+    // How a URL is actually opened. Empty means "use exec::open_url", which
+    // launches xdg-open or open.
+    //
+    // A seam rather than a direct call, for the same reason kpl::Project's
+    // callbacks are: without it, a test of the URL-finding logic would launch a
+    // real browser on the machine running the tests. That is not hypothetical —
+    // it happened while these tests were being written.
+    std::function<bool(const std::string&)> open_url;
+
     // Where kap's own narration goes. The child's output is not routed through
     // these — a sequential child writes straight to the inherited descriptors.
     std::ostream* out = nullptr; // defaults to std::cout
@@ -117,6 +138,17 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options);
 // (e.g. "pre_build") and is used in messages. An empty command is a no-op that
 // succeeds.
 Outcome run_hook(const std::string& command, const std::string& name, const Options& options);
+
+// The first http:// or https:// URL in `text`, or empty when there is none.
+// Exposed for testing: getting the trailing-punctuation rules right matters
+// more than it looks, because a URL printed as `at http://localhost:3000.`
+// must not be opened with the sentence's full stop attached.
+std::string find_url(std::string_view text);
+
+// Ask the desktop to open `url` (xdg-open on Linux, open on macOS). Returns
+// false when neither is available. Never blocks: the opener is detached, so a
+// browser that takes two seconds to start does not stall the dev loop.
+bool open_url(const std::string& url);
 
 // Render one step the way --dry-run and --verbose show it: the argv array
 // shell-quoted for display, plus any cwd/env/label the step carries. Exposed

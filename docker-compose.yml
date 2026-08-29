@@ -6,8 +6,18 @@
 # kap's caches out of the source tree (so `git status` stays clean).
 #
 # Usage:
-#   docker compose run --rm dev            # interactive shell
-#   docker compose run --rm dev ./scripts/ci.sh   # one-shot CI
+#   docker compose run --rm dev                    # interactive shell
+#   docker compose run --rm dev ./scripts/ci.sh    # one-shot CI
+#
+# `dev-full` (design doc §10.5) adds the ecosystem toolchains the first-party
+# plugins drive — Rust, Node, Go, Python/uv — for the last-mile check that the
+# argv arrays kap produces are ones the real tools accept. It is behind a
+# compose profile so it is never built unless asked for: it is roughly ten times
+# the size of `dev` and tracks four upstream release cadences, and nobody fixing
+# a typo in the TOML parser should wait on a Rust download.
+#
+#   docker compose --profile full build dev-full
+#   docker compose --profile full run --rm dev-full ./scripts/ci-full.sh
 
 services:
   dev:
@@ -32,7 +42,30 @@ services:
     stdin_open: true
     tty: true
 
+  # The ecosystem image. Same repo mount and the same entrypoint; separate
+  # build/cache volumes so switching between the two images does not force a
+  # full rebuild each time, and so a Rust target/ directory never lands in the
+  # `dev` image's cache.
+  dev-full:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: docker/dev-full.Dockerfile
+    init: true
+    volumes:
+      - .:/kap
+      - kap-full-build:/kap/build
+      - kap-full-cache:/root/.cache
+      - kap-config:/root/.config/kap
+    working_dir: /kap
+    environment:
+      - KAP_DEV=1
+    stdin_open: true
+    tty: true
+
 volumes:
   kap-build:
   kap-cache:
   kap-config:
+  kap-full-build:
+  kap-full-cache:
