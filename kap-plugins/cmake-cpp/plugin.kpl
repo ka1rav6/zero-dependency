@@ -57,11 +57,15 @@ command build(project, config, extra) {
 
   let configure = ["cmake", "-S", ".", "-B", dir]
 
-  // `auto` prefers Ninja when it is installed and otherwise says nothing at
-  // all, letting CMake pick its own platform default. `none` is how a KPL
-  // expression says "no value"; the flag below is simply not added.
+  // A build directory that has already been configured records its generator
+  // in CMakeCache.txt, and CMake refuses to be handed a different one — so
+  // `auto` says nothing at all when a cache is present and lets CMake reuse
+  // what is already there. Only for a fresh directory does it express a
+  // preference for Ninja. `none` is how a KPL expression says "no value"; the
+  // flag below is simply not added.
   let generator = match config.generator {
-    auto           => if project.tool("ninja") then "Ninja" else none,
+    auto           => if project.exists(config.build_dir + "/CMakeCache.txt") then none
+                      else if project.tool("ninja") then "Ninja" else none,
     ninja          => "Ninja",
     make           => "Unix Makefiles",
     unix_makefiles => "Unix Makefiles",
@@ -93,8 +97,10 @@ command check(project, config, extra) {
   step mkdir "-p" dir
 
   let configure = ["cmake", "-S", ".", "-B", dir]
+  // Same reasoning as `build`: never contradict an existing CMakeCache.txt.
   let generator = match config.generator {
-    auto           => if project.tool("ninja") then "Ninja" else none,
+    auto           => if project.exists(config.build_dir + "/CMakeCache.txt") then none
+                      else if project.tool("ninja") then "Ninja" else none,
     ninja          => "Ninja",
     make           => "Unix Makefiles",
     unix_makefiles => "Unix Makefiles",
