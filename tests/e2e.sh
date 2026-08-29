@@ -27,6 +27,17 @@ kap_version="${2:?usage: e2e.sh <path-to-kap-binary> <expected-version>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture="$repo_root/tests/fixtures/config"
 
+# Hermeticity: kap reads ~/.config/kap/config.toml as the global configuration
+# layer (§5.12) and writes ~/.local/share and ~/.cache. A developer with real
+# files in any of those would get different results from CI, which is the exact
+# class of flake that makes a suite stop being trusted. Point all three at a
+# scratch directory for the duration of the run.
+e2e_home="$(mktemp -d)"
+export XDG_CONFIG_HOME="$e2e_home/config"
+export XDG_DATA_HOME="$e2e_home/data"
+export XDG_CACHE_HOME="$e2e_home/cache"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+
 passed=0
 failed=0
 
@@ -132,7 +143,9 @@ expect_empty_stdout "a missing key prints nothing to stdout" \
 
 expect_status "config get exits 1 when there is no config file" 1 \
     config get --root /nonexistent-directory-xyz some.key
-expect_stderr_contains "a missing config file says so" "no configuration file at" \
+expect_stderr_contains "a missing config file says so" "no configuration file" \
+    config get --root /nonexistent-directory-xyz some.key
+expect_stderr_contains "a missing config file names where it looked" "config.toml" \
     config get --root /nonexistent-directory-xyz some.key
 
 # --- config subcommand dispatch ---------------------------------------------------
@@ -146,9 +159,6 @@ expect_stderr_contains "an unknown config subcommand lists the valid ones" "expe
 expect_empty_stdout "an unknown config subcommand prints no value" \
     config nonsense --root "$fixture" server.host
 
-expect_status "config set is refused until Milestone 6" 2 config set a b
-expect_stderr_contains "config set explains when it arrives" "not implemented yet" config set a b
-expect_status "config edit is refused until Milestone 6" 2 config edit
 expect_status "bare 'kap config' shows usage and exits 2" 2 config
 expect_status "config get with no key exits 2" 2 config get --root "$fixture"
 expect_status "config get with two keys exits 2" 2 config get --root "$fixture" a b
@@ -354,7 +364,187 @@ expect_stdout "a key under a section header is reachable" "example" \
 expect_status "the same key is NOT at the document root" 1 \
     config get --root "$bad_dir" host
 
+# --- config set / edit (Milestone 6) ----------------------------------------------
+
+set_dir="$(mktemp -d)"
+
+expect_status "config set writes a project key" 0 \
+    config set --root "$set_dir" plugins.cmake-cpp.generator ninja
+expect_stdout "config set reads back through config get" "ninja" \
+    config get --root "$set_dir" plugins.cmake-cpp.generator
+expect_status "config set with the wrong number of arguments exits 2" 2 \
+    config set --root "$set_dir" only-a-key
+expect_status "config set rejects an unknown option" 2 \
+    config set --root "$set_dir" --nonsense a b
+
+# --dry-run must not touch the file.
+expect_stdout_contains "config set honours --dry-run" "would set" \
+    -n config set --root "$set_dir" plugins.cmake-cpp.generator make
+expect_stdout "config set --dry-run really did not write" "ninja" \
+    config get --root "$set_dir" plugins.cmake-cpp.generator
+
+# The global layer is a separate file, and the project layer wins over it.
+"$kap_bin" config set --global plugins.cmake-cpp.build_dir global-dir >/dev/null 2>&1
+expect_stdout "config get --global reads the global file" "global-dir" \
+    config get --root "$set_dir" --global plugins.cmake-cpp.build_dir
+"$kap_bin" config set --root "$set_dir" plugins.cmake-cpp.build_dir project-dir >/dev/null 2>&1
+expect_stdout "the project layer wins in the merged view" "project-dir" \
+    config get --root "$set_dir" plugins.cmake-cpp.build_dir
+expect_stdout "the global layer still shows its own value" "global-dir" \
+    config get --root "$set_dir" --global plugins.cmake-cpp.build_dir
+
+# config edit needs an editor and says so rather than guessing at one.
+saved_editor="${EDITOR:-}"; saved_visual="${VISUAL:-}"
+unset EDITOR VISUAL
+expect_status "config edit without an editor exits 1" 1 config edit --root "$set_dir"
+expect_stderr_contains "config edit names the file when it cannot open it" "kap.toml" \
+    config edit --root "$set_dir"
+EDITOR=true "$kap_bin" config edit --root "$set_dir" >/dev/null 2>&1
+if [ $? -eq 0 ]; then
+    pass "config edit runs \$EDITOR"
+else
+    fail "config edit runs \$EDITOR" "expected exit status 0"
+fi
+[ -n "$saved_editor" ] && export EDITOR="$saved_editor"
+[ -n "$saved_visual" ] && export VISUAL="$saved_visual"
+
+# The global layer written above is real and would otherwise change every test
+# below it — which is itself proof the layer works, but not what those tests are
+# checking. Reset it.
+rm -f "$XDG_CONFIG_HOME/kap/config.toml"
+rm -rf "$set_dir"
+
+# --- the project-command lifecycle (Milestones 5 + 6) ------------------------------
+#
+# Milestone 5 and 6's shared exit criterion: `kap build` builds a real CMake
+# project and `kap build -n` prints the commands without running them. This is
+# the only place the whole chain — CLI, config merge, detection, plugin load,
+# type check, KPL evaluation, executor — is exercised as one thing.
+
+proj="$(mktemp -d)"
+export KAP_PLUGIN_PATH="$repo_root/plugins"
+cat > "$proj/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.16)
+project(kap_e2e_demo CXX)
+add_executable(demo main.cpp)
+CMAKE
+cat > "$proj/main.cpp" <<'CPP'
+#include <cstdio>
+int main() { std::puts("built by kap"); return 0; }
+CPP
+
+expect_status "build --dry-run exits 0" 0 build -n --root "$proj"
+expect_stdout_contains "build --dry-run shows the configure step" "cmake -S . -B build" \
+    build -n --root "$proj"
+expect_stdout_contains "build --dry-run shows the build step" "cmake --build build" \
+    build -n --root "$proj"
+if [ -d "$proj/build" ]; then
+    fail "build --dry-run runs nothing" "a build directory was created"
+else
+    pass "build --dry-run runs nothing"
+fi
+
+expect_stdout_contains "--set reaches the plugin's config record" "cmake -S . -B out" \
+    build -n --root "$proj" --set build_dir=out
+expect_stdout_contains "--set appends list values" "-DFROM_SET=1" \
+    build -n --root "$proj" --set cmake_args=-DFROM_SET=1
+
+expect_status "--set with an unknown key exits 1" 1 \
+    build -n --root "$proj" --set no_such_key=1
+expect_stderr_contains "an unknown key names itself" "unknown config key 'no_such_key'" \
+    build -n --root "$proj" --set no_such_key=1
+expect_status "--set with a bad enum member exits 1" 1 \
+    build -n --root "$proj" --set generator=clown
+expect_stderr_contains "a bad enum member lists the valid ones" "auto, ninja, make" \
+    build -n --root "$proj" --set generator=clown
+
+# kap.toml overrides, and hooks (§5.13).
+cat > "$proj/kap.toml" <<'TOML'
+[plugins.cmake-cpp]
+build_dir = "out"
+
+[hooks]
+pre_build = "echo HOOK-PRE"
+post_build = "echo HOOK-POST"
+TOML
+expect_stdout_contains "kap.toml overrides reach the plugin" "cmake -S . -B out" \
+    build -n --root "$proj"
+expect_stdout_contains "--dry-run shows the pre hook" "pre_build" build -n --root "$proj"
+
+# The real thing. Skipped where cmake is not installed — CI's dev image has it,
+# a bare machine may not, and a missing toolchain is not a kap failure.
+if command -v cmake >/dev/null 2>&1; then
+    build_log="$("$kap_bin" build --root "$proj" 2>&1)"
+    build_status=$?
+    if [ "$build_status" -eq 0 ] && [ -x "$proj/out/demo" ]; then
+        pass "kap build builds a real CMake project"
+    else
+        fail "kap build builds a real CMake project" "status=$build_status log=$build_log"
+    fi
+    case "$build_log" in
+        *HOOK-PRE*HOOK-POST*) pass "hooks run before and after the build" ;;
+        *) fail "hooks run before and after the build" "log=$build_log" ;;
+    esac
+    if [ "$("$proj/out/demo")" = "built by kap" ]; then
+        pass "the binary kap built actually runs"
+    else
+        fail "the binary kap built actually runs" "unexpected output"
+    fi
+
+    # clean removes it and reports what it recovered.
+    clean_log="$("$kap_bin" clean --root "$proj" 2>&1)"
+    if [ ! -d "$proj/out" ]; then
+        pass "kap clean removes the build directory"
+    else
+        fail "kap clean removes the build directory" "$proj/out still exists"
+    fi
+    case "$clean_log" in
+        *freed*) pass "kap clean reports the space it freed" ;;
+        *) fail "kap clean reports the space it freed" "log=$clean_log" ;;
+    esac
+
+    # A failing tool's exit code is propagated, never swallowed (§4 step 7).
+    printf 'this is not valid cmake(((\n' > "$proj/CMakeLists.txt"
+    rm -rf "$proj/out"
+    "$kap_bin" build --root "$proj" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        pass "a failing build propagates a non-zero exit code"
+    else
+        fail "a failing build propagates a non-zero exit code" "expected non-zero"
+    fi
+else
+    printf '[SKIP] kap build against a real CMake project (cmake not installed)\n'
+fi
+
+# A command the matched plugin does not define is refused with the list it does.
+expect_status "an undefined command exits 1" 1 dev --root "$proj"
+expect_stderr_contains "an undefined command lists what is available" "available:" \
+    dev --root "$proj"
+
+# Tool arguments go after `--`, and a bare one is refused rather than guessed at.
+expect_status "a bare tool argument is refused" 2 build --root "$proj" --target install
+expect_stderr_contains "the refusal shows the '--' form" "kap build -- --target install" \
+    build --root "$proj" --target install
+expect_stdout_contains "passthrough arguments reach the build step" "--target install" \
+    build -n --root "$proj" -- --target install
+
+# Nothing matches: a clear error, not a crash and not a guess.
+empty_proj="$(mktemp -d)"
+expect_status "a directory no plugin claims exits 1" 1 build --root "$empty_proj"
+expect_stderr_contains "it says which plugins were considered" "considered:" \
+    build --root "$empty_proj"
+rm -rf "$empty_proj"
+
+# An unknown command lists what kap does know.
+expect_status "an unknown command exits 2" 2 buidl
+expect_stderr_contains "an unknown command lists the project commands" "project commands:" buidl
+
+unset KAP_PLUGIN_PATH
+rm -rf "$proj"
+
 # --- summary ----------------------------------------------------------------------
+
+rm -rf "$e2e_home"
 
 printf '\n%d e2e tests: %d passed, %d failed\n' "$((passed + failed))" "$passed" "$failed"
 [ "$failed" -eq 0 ]

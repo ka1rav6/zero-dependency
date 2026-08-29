@@ -1072,7 +1072,22 @@ build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides
             continue;
         }
         if (!schema_value_matches(value, found->second->type, found->second->enum_values)) {
-            errors.push_back("config key '" + name + "' must be " + found->second->type);
+            // Name the members for an enum. "must be enum" is technically true
+            // and completely useless: the whole reason to declare an enum is
+            // that the valid answers are a short, printable list, and a user
+            // who typed `--set generator=clown` needs to see that list, not a
+            // restatement of the field's kind.
+            if (found->second->type == "enum") {
+                std::string members;
+                for (const std::string& member : found->second->enum_values)
+                    members += (members.empty() ? "" : ", ") + member;
+                const std::string got =
+                    value.kind == Value::Kind::String ? "'" + value.string + "'" : "that value";
+                errors.push_back("config key '" + name + "' does not accept " + got +
+                                 "; expected one of: " + members);
+            } else {
+                errors.push_back("config key '" + name + "' must be " + found->second->type);
+            }
             continue;
         }
         result[name] = value;

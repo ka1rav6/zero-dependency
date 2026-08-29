@@ -1163,20 +1163,52 @@ never be reported as freed space.
 
 ---
 
-### Milestone 6 — Config merge + CLI wiring ⬅ **next**
+### Milestone 6 — Config merge + CLI wiring
 **Goal:** End-to-end `kap <command>` for one plugin.
 
-- [ ] Config merge: schema defaults → global → project → `--set`
-- [ ] Wire CLI → detect → load plugin → eval KPL → execute
-- [ ] `kap config get/set/edit`
-- [ ] All v1 commands routed (missing command → clear error)
+- [x] Config merge: schema defaults → global → project → `--set`
+- [x] Wire CLI → detect → load plugin → eval KPL → execute
+- [x] `kap config get/set/edit`
+- [x] All v1 commands routed (missing command → clear error)
 
 **Exit criteria:** `kap build/test/clean` work in a dogfood repo using
-the `cmake-cpp` plugin.
+the `cmake-cpp` plugin. ✅ — end-to-end assertions build a real CMake project,
+run the binary it produced, clean it, and check that a failing build propagates
+its exit code. 325 unit tests + 112 end-to-end assertions.
+
+**Notes for later milestones.**
+
+`core/config.hpp` implements §5.12's four layers. Three decisions worth knowing:
+
+*A nearer layer replaces, it never element-merges.* If `cmake_args` merged
+element-wise, a project could never *remove* an argument its user's global
+config had added — only add more. "The nearer layer wins outright" is the rule
+a user can predict.
+
+*`--set` is coerced through the schema.* A command line has no types, so the
+schema is the only thing that can say whether `release=true` means the string
+or the boolean. `--set` on a `list<str>` splits on commas, because §5.12's
+syntax is one `key=value` pair and a list-valued key still has to fit in one.
+
+*`kap config get` reads the merged view by default*, because "what will kap
+actually do" is the question a user has; `--global` / `--project` narrow it to
+one file. `kap config set` writes one file (project by default) through
+`toml::write`, which round-trips *values* but not comments or layout — which is
+why `kap config edit` exists.
+
+`kap ci` implements §8's "fmt-check + lint + test, or plugin-defined"
+literally: a plugin's own `ci` command wins outright, and otherwise kap runs
+whichever of `fmt`, `lint`, and `test` the plugin defines, stopping at the
+first failure. For the `fmt` phase only, if the plugin's schema declares a bool
+field named `check`, kap sets it — that is the difference between a CI job
+*verifying* formatting and one silently rewriting the checkout.
+
+Post hooks run only on success. A `post_test = "notify-send 'tests finished'"`
+firing after a *failed* test run would be actively misleading.
 
 ---
 
-### Milestone 7 — Plugin manager
+### Milestone 7 — Plugin manager ⬅ **next**
 **Goal:** Install plugins from registry/git/local.
 
 - [ ] Registry `index.toml` format + fetch/cache

@@ -99,5 +99,25 @@ private:
 // syntax problem, with the offending line and column attached.
 Document parse(std::string_view text, std::string source_name = {});
 
+// Render a table back to TOML text (design doc Milestone 6's `kap config set`
+// and Milestone 7's installed-plugins.toml lockfile).
+//
+// The output is *canonical*: scalars and arrays of a table come first, then
+// its sub-tables as `[dotted.headers]`, everything in the key order std::map
+// already guarantees. Two documents holding the same values therefore render
+// byte-identically, which is what makes a lockfile diffable and a `config set`
+// produce a minimal diff instead of reshuffling the file.
+//
+// What is NOT preserved: comments, blank lines, and the author's original key
+// order. `write` round-trips *values*, not formatting — so `kap config set`
+// rewrites a hand-edited kap.toml losslessly as far as meaning goes, but not
+// as far as layout goes. That is why `kap config edit` exists: a user who
+// cares about the layout of their config should edit it directly.
+//
+// `escape_string` is exposed because the lockfile writer needs the same
+// quoting rules and reimplementing them would be one more place to get wrong.
+std::string write(const Value& table);
+std::string escape_string(std::string_view text);
+
 } // namespace toml
 } // namespace kap

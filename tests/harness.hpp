@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -136,7 +137,21 @@ inline std::string to_string_display(const std::filesystem::path& p)
     return p.string();
 }
 
-template <typename T> std::string to_string_display(const T& v)
+// Enumerations have no std::to_string overload, so without this the generic
+// fallback below fails to compile the moment a test compares two enum values —
+// and "the kind of this value" is exactly what a config or parser test wants
+// to assert. Rendered as the underlying number, which is enough to tell two
+// mismatched kinds apart in a failure message.
+template <typename T>
+    requires std::is_enum_v<T>
+std::string to_string_display(const T& v)
+{
+    return std::to_string(static_cast<std::underlying_type_t<T>>(v));
+}
+
+template <typename T>
+    requires(!std::is_enum_v<T>)
+std::string to_string_display(const T& v)
 {
     return std::to_string(v);
 }

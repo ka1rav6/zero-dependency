@@ -285,3 +285,94 @@ KAP_TEST("TOML names the features it deliberately does not implement")
     // And a genuine syntax error still reads as one.
     KAP_ASSERT(message("a = 1 2\n").find("expected end of line") != std::string::npos);
 });
+
+// --- writing (Milestone 6: `kap config set`, Milestone 7: the lockfile) -----------
+
+KAP_TEST("escape_string quotes exactly the four escapes the parser understands")
+{
+    KAP_ASSERT_EQ(kap::toml::escape_string("plain"), std::string("\"plain\""));
+    KAP_ASSERT_EQ(kap::toml::escape_string("a\"b"), std::string("\"a\\\"b\""));
+    KAP_ASSERT_EQ(kap::toml::escape_string("a\\b"), std::string("\"a\\\\b\""));
+    KAP_ASSERT_EQ(kap::toml::escape_string("a\nb"), std::string("\"a\\nb\""));
+    KAP_ASSERT_EQ(kap::toml::escape_string("a\tb"), std::string("\"a\\tb\""));
+});
+
+KAP_TEST("write renders scalars, arrays, and nested tables as headers")
+{
+    kap::toml::Value root = kap::toml::make_table();
+    root.table["name"]    = kap::toml::make_string("demo");
+    root.table["port"]    = kap::toml::make_integer(8080);
+    root.table["enabled"] = kap::toml::make_boolean(true);
+    root.table["args"] =
+        kap::toml::make_array({kap::toml::make_string("-a"), kap::toml::make_string("-b")});
+
+    kap::toml::Value plugins   = kap::toml::make_table();
+    kap::toml::Value cmake     = kap::toml::make_table();
+    cmake.table["generator"]   = kap::toml::make_string("ninja");
+    plugins.table["cmake-cpp"] = cmake;
+    root.table["plugins"]      = plugins;
+
+    const std::string text = kap::toml::write(root);
+    KAP_ASSERT(text.find("name = \"demo\"") != std::string::npos);
+    KAP_ASSERT(text.find("port = 8080") != std::string::npos);
+    KAP_ASSERT(text.find("enabled = true") != std::string::npos);
+    KAP_ASSERT(text.find("args = [\"-a\", \"-b\"]") != std::string::npos);
+    // A plugin name with a dash must stay a bare key, not become quoted.
+    KAP_ASSERT(text.find("[plugins.cmake-cpp]") != std::string::npos);
+    KAP_ASSERT(text.find("generator = \"ninja\"") != std::string::npos);
+});
+
+KAP_TEST("write puts a table's scalars before its sub-table headers")
+{
+    // Not a style preference: TOML binds every `key = value` to the most
+    // recent header, so a scalar emitted after a sub-table header would end up
+    // in the wrong table and the document would no longer round-trip.
+    kap::toml::Value root   = kap::toml::make_table();
+    kap::toml::Value nested = kap::toml::make_table();
+    nested.table["inner"]   = kap::toml::make_integer(1);
+    // "aaa" sorts before "zzz", so a naive single pass would emit the table first.
+    root.table["aaa"] = nested;
+    root.table["zzz"] = kap::toml::make_integer(2);
+
+    const std::string text = kap::toml::write(root);
+    KAP_ASSERT(text.find("zzz = 2") < text.find("[aaa]"));
+});
+
+KAP_TEST("a document round-trips through write and parse")
+{
+    const std::string         original = R"(
+top = "level"
+[server]
+host = "localhost"
+port = 8080
+[plugins.cmake-cpp]
+generator = "ninja"
+cmake_args = ["-DX=1", "-DY=2"]
+)";
+    const kap::toml::Document first    = kap::toml::parse(original, "original.toml");
+    const std::string         text     = kap::toml::write(first.root());
+    const kap::toml::Document second   = kap::toml::parse(text, "rewritten.toml");
+
+    KAP_ASSERT_EQ(second.get("top")->str, std::string("level"));
+    KAP_ASSERT_EQ(second.get("server.host")->str, std::string("localhost"));
+    KAP_ASSERT_EQ(second.get("server.port")->integer, static_cast<std::int64_t>(8080));
+    KAP_ASSERT_EQ(second.get("plugins.cmake-cpp.generator")->str, std::string("ninja"));
+    KAP_ASSERT_EQ(second.get("plugins.cmake-cpp.cmake_args")->array.size(),
+                  static_cast<std::size_t>(2));
+
+    // Writing the reparsed document must produce identical bytes, which is
+    // what makes a lockfile diffable.
+    KAP_ASSERT_EQ(kap::toml::write(second.root()), text);
+});
+
+KAP_TEST("write escapes a key that cannot be bare")
+{
+    kap::toml::Value root       = kap::toml::make_table();
+    root.table["needs quoting"] = kap::toml::make_integer(1);
+    KAP_ASSERT(kap::toml::write(root).find("\"needs quoting\" = 1") != std::string::npos);
+});
+
+KAP_TEST("write of an empty table is empty, not a stray newline")
+{
+    KAP_ASSERT_EQ(kap::toml::write(kap::toml::make_table()), std::string(""));
+});

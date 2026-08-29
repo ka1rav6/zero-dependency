@@ -582,5 +582,135 @@ Document parse(std::string_view text, std::string source_name)
     return parser.run();
 }
 
+// --- writing ----------------------------------------------------------------------
+
+std::string escape_string(std::string_view text)
+{
+    // The inverse of the parser's escape handling, and deliberately no wider:
+    // this subset understands \" \\ \n \t, so those are the four that get
+    // an escape. Any other control character is written as-is rather than as a
+    // \uXXXX the parser would then reject — writing something we cannot read
+    // back would be worse than the (already unusual) raw byte.
+    std::string out = "\"";
+    for (const char ch : text) {
+        switch (ch) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                out += ch;
+                break;
+        }
+    }
+    out += '"';
+    return out;
+}
+
+namespace
+{
+
+// A bare key needs no quoting; anything else does. The parser accepts dashes
+// in bare keys (plugin names like `cmake-cpp` are the reason), so the writer
+// must too, or a round-trip would gratuitously quote every plugin section.
+bool is_bare_key(std::string_view key)
+{
+    if (key.empty())
+        return false;
+    for (const char ch : key) {
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
+std::string render_key(const std::string& key)
+{
+    return is_bare_key(key) ? key : escape_string(key);
+}
+
+// One scalar or array, as it appears on the right of an `=`.
+std::string render_scalar(const Value& value)
+{
+    switch (value.kind) {
+        case Value::Kind::String:
+            return escape_string(value.str);
+        case Value::Kind::Integer:
+            return std::to_string(value.integer);
+        case Value::Kind::Boolean:
+            return value.boolean ? "true" : "false";
+        case Value::Kind::Array:
+            {
+                std::string out = "[";
+                for (std::size_t index = 0; index < value.array.size(); ++index) {
+                    if (index != 0)
+                        out += ", ";
+                    out += render_scalar(value.array[index]);
+                }
+                out += "]";
+                return out;
+            }
+        case Value::Kind::Table:
+            // Unreachable through write(), which routes tables to headers. An
+            // inline table would be the natural rendering, but the parser
+            // rejects those (see core/toml.hpp), so emitting one would produce
+            // a file kap itself cannot read.
+            return "{}";
+    }
+    return "\"\"";
+}
+
+// Emit `table`, then recurse into its sub-tables. `prefix` is the dotted
+// header path built so far.
+void write_table(const Value& table, const std::string& prefix, std::string& out)
+{
+    // Scalars first: TOML binds every `key = value` to the most recent header,
+    // so a scalar written after a sub-table header would silently land in the
+    // wrong table. This ordering is a correctness requirement, not a style.
+    for (const auto& [key, value] : table.table) {
+        if (value.kind == Value::Kind::Table)
+            continue;
+        out += render_key(key) + " = " + render_scalar(value) + "\n";
+    }
+
+    for (const auto& [key, value] : table.table) {
+        if (value.kind != Value::Kind::Table)
+            continue;
+        const std::string header =
+            prefix.empty() ? render_key(key) : prefix + "." + render_key(key);
+        if (!out.empty() && out.back() != '\n')
+            out += "\n";
+        out += "\n[" + header + "]\n";
+        write_table(value, header, out);
+    }
+}
+
+} // namespace
+
+std::string write(const Value& table)
+{
+    if (table.kind != Value::Kind::Table)
+        return {};
+    std::string out;
+    write_table(table, {}, out);
+
+    // A leading blank line happens when the root table has no scalars of its
+    // own and goes straight into a `[header]`. Harmless, but a file that opens
+    // with an empty line looks like a mistake.
+    while (!out.empty() && out.front() == '\n')
+        out.erase(0, 1);
+    return out;
+}
+
 } // namespace toml
 } // namespace kap
