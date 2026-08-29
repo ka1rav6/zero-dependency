@@ -1109,22 +1109,61 @@ too-new plugin cannot break `kap build` in an unrelated project.
 
 ---
 
-### Milestone 5 — Executor ⬅ **next**
+### Milestone 5 — Executor
 **Goal:** Actually run commands.
 
-- [ ] `posix_spawn` wrapper with stdout/stderr streaming
-- [ ] `--dry-run` rendering (print argv arrays)
-- [ ] Per-step `cwd`, `env`, `label`
-- [ ] Concurrent mode with prefixed output (`kap dev`)
-- [ ] Hook execution (`pre_*`/`post_*` from `kap.toml`)
-- [ ] Exit-code propagation; `SIGINT` forwards to all children
+- [x] Process wrapper with stdout/stderr streaming
+- [x] `--dry-run` rendering (print argv arrays)
+- [x] Per-step `cwd`, `env`, `label`
+- [x] Concurrent mode with prefixed output (`kap dev`)
+- [x] Hook execution (`pre_*`/`post_*` from `kap.toml`)
+- [x] Exit-code propagation; `SIGINT` forwards to all children
 
 **Exit criteria:** `kap build` in a real CMake project builds it;
-`kap build -n` prints commands without running.
+`kap build -n` prints commands without running. ✅ — reached jointly with
+Milestone 6, which is what wires a command line to `exec::run`; see that
+milestone's notes.
+
+**Notes for later milestones.**
+
+`core/exec.hpp` is the only place in kap that creates a process, which is what
+makes §5.4's promise real: a plugin cannot run anything kap has not first
+rendered as an argv array it was willing to show you.
+
+*`fork` + `execvp`, not `posix_spawn`.* §9 permits either. A step may carry its
+own `cwd` (§5.4), and giving a *spawned* process a different working directory
+needs `posix_spawn_file_actions_addchdir_np` — a glibc extension musl and older
+glibc lack. Between `fork` and `exec`, `chdir` is one portable line.
+
+*No shell for steps; a shell for hooks.* Steps are argv arrays, so a directory
+named `my project` reaches the tool intact and a plugin cannot smuggle
+`; rm -rf ~` through a filename. Hooks (§5.13) are explicitly "plain shell
+strings", come from the user's own kap.toml rather than from a plugin, and run
+through `/bin/sh -c`. `run_steps` and `run_hook` are separate functions so the
+distinction cannot erode.
+
+*Sequential runs inherit the terminal; concurrent runs use pipes.* An inherited
+terminal keeps `cargo build`'s colours and `ninja`'s progress line working
+exactly as if you had typed the command. Concurrent steps cannot have that —
+four interleaved dev servers are unreadable — so they get pipes and each line
+is emitted with its step's label as a coloured prefix. Multiplexing uses
+`poll(2)` in the main thread rather than a thread per child, so the process
+never forks while threads exist.
+
+*A missing tool is not exit 127.* The child reports exec failure through a
+close-on-exec pipe, so kap can say "cannot run 'cmake': No such file or
+directory" instead of a bare status. A child killed by signal N is reported as
+128 + N, the convention every POSIX shell uses.
+
+*`report_freed_space` measures what it can name.* Any argv word that names an
+existing path under the root is measured before and after; a command with no
+path-shaped argument (`cargo clean`) falls back to measuring the whole root.
+Symlinks are counted as links and never followed, so a link into `/usr` can
+never be reported as freed space.
 
 ---
 
-### Milestone 6 — Config merge + CLI wiring
+### Milestone 6 — Config merge + CLI wiring ⬅ **next**
 **Goal:** End-to-end `kap <command>` for one plugin.
 
 - [ ] Config merge: schema defaults → global → project → `--set`
