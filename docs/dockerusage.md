@@ -156,9 +156,34 @@ passes in CI but not on my machine" and its inverse are both impossible.
 - **Release-style image** — repo-root `Dockerfile` builds the *binary* in a
   full toolchain then copies it into a minimal runtime image (multi-stage).
   Use it when you want `kap` as a deployable command.
-- **`dev-full`** (with Rust, Node, Go, …) — planned for Milestone 10. It adds
-  the ecosystem toolchains needed to run the full first-party plugin
-  test-suite in one container.
+- **`dev-full`** — `docker/dev-full.Dockerfile`, with Rust, Node, Go, and
+  Python/uv on top of everything `dev` has. It is behind a compose profile, so
+  it is never built unless you ask:
+
+  ```bash
+  docker compose --profile full build dev-full
+  docker compose --profile full run --rm dev-full ./scripts/ci-full.sh
+  ```
+
+  **When you need it.** `scripts/ci.sh` proves every plugin emits the argv
+  arrays its golden files say it should, with no ecosystem toolchain installed
+  anywhere — that is deliberate, and it is what keeps the suite fast and
+  portable. What it structurally cannot prove is that those argv arrays are ones
+  the real tools *accept*: a plugin can emit `cargo buidl --release`, match its
+  golden file perfectly, and be completely broken.
+
+  `scripts/ci-full.sh` closes that gap. It creates a real project of each of the
+  six kinds and runs `kap build`, `kap test`, and friends against it for real.
+  Reach for it when you change a plugin; the fast image is right for everything
+  else.
+
+  It is roughly ten times the size of `dev` and tracks four upstream release
+  cadences instead of one, which is exactly why it is not the default: nobody
+  fixing a typo in the TOML parser should wait on a Rust toolchain download.
+
+  Toolchain versions are pinned as build arguments (`GO_VERSION`,
+  `RUST_VERSION`, `NODE_MAJOR`), so bumping one is a one-line edit and a
+  reviewable diff.
 
 ---
 
@@ -180,6 +205,9 @@ passes in CI but not on my machine" and its inverse are both impossible.
 | `docker/dev.Dockerfile` | The pinned dev image (toolchain + entrypoint). |
 | `docker/entrypoint.sh` | Runs before each command; verifies `/kap` and exports `KAP_DEV=1`; `exec`s the user command. |
 | `scripts/bootstrap.sh` | Self-contained setup; `--check-deps` at image build, full configure+build+test when run manually. |
-| `scripts/ci.sh` | One-shot pipeline: configure → build → unit tests → format → smoke. |
+| `docker/dev-full.Dockerfile` | The ecosystem image: `dev` plus Rust, Node, Go, and Python/uv. Behind the `full` compose profile. |
+| `scripts/ci.sh` | One-shot pipeline: configure → build → unit tests → e2e → format → plugin checks → detection → install → completions → smoke. |
+| `scripts/ci-full.sh` | `ci.sh`, then `kap build`/`test` against a real project of each of the six ecosystems. Needs `dev-full`. |
+| `scripts/install.sh` | The `curl \| sh` installer: clone, build, test, install binary + plugins + registry. |
 | `scripts/in-docker.sh` | Wrapper that runs any command inside the dev container. |
 | `docker-compose.yml` | Glues volumes, env, TTY, and `init` to the dev service. |

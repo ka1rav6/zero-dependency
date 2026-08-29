@@ -1324,30 +1324,127 @@ repository rather than the machine.
 
 ---
 
-### Milestone 9 — Bundled system plugins ⬅ **next**
+### Milestone 9 — Bundled system plugins
 **Goal:** `doctor` and `ports` in KPL.
 
-- [ ] `doctor` — checks `[requires]` from all matched plugins
-- [ ] `ports` — reads `/proc/net/tcp` (Linux) or `lsof` fallback via step
-- [ ] `generic-makefile` fallback plugin
+- [x] `doctor` — checks `[requires]` from all matched plugins
+- [x] `ports` — `ss` / `lsof` / `netstat` via step (see the note below on
+      `/proc/net/tcp`)
+- [x] `make-generic` fallback plugin — shipped in Milestone 8. (This milestone
+      and §6.6 originally spelled it `generic-makefile` while Milestone 8's
+      list spelled it `make-generic`; the Milestone-8 spelling is what ships.)
 
 **Exit criteria:** `kap doctor` and `kap ports` work; implemented entirely
-in KPL.
+in KPL. ✅ — 10 fixture cases across the two, plus 17 end-to-end assertions
+against the real binary.
+
+**Notes.**
+
+Both plugins are `composable: true` with a `detect` block that matches every
+directory, so they ride alongside whichever plugin owns the project (§3.3) and
+never compete to answer `kap build`.
+
+*How `doctor` learns what to check.* KPL cannot see other plugins — that is a
+deliberate sandbox property (§7), since a plugin that could enumerate its
+neighbours could fingerprint the machine. So the core does the one thing only it
+can: it reads every matched plugin's `requires` block and injects the result
+into the doctor plugin's `config` record, through fields the plugin declares in
+its own schema. Policy — what to check, what counts as healthy, what to print,
+what exit status to produce — stays in KPL. This is the agreed resolution of
+§4's "not hardcoded C++" requirement.
+
+`any_of` grouping is preserved by comma-joining each group into one element,
+which the plugin splits with the `split` builtin. Flattening it would report a
+machine that has `ss` as missing `lsof` and `netstat`.
+
+Injected values sit at the *bottom* of §5.12's chain, just above the schema
+defaults, so "later wins" holds with no exception. Placing them higher — so a
+project could not understate what doctor checks — buys nothing real: a committed
+`kap.toml` is already trusted to run arbitrary shell through §5.13's hooks. What
+it cost was the ability to experiment with the field at all.
+
+*Why `ports` does not read `/proc/net/tcp`.* This milestone's wording offers
+"`/proc/net/tcp` (Linux) or `lsof` fallback via step", and only the second half
+is reachable from KPL — for two independent reasons, both of them features:
+
+  1. §7's sandbox canonicalises every path passed to `project.read` and refuses
+     anything outside the project root. `/proc` is outside every project root,
+     and special-casing it would put a hole in the one rule that makes plugins
+     safe to install from a git URL.
+  2. `/proc/net/tcp` stores addresses and ports as big-endian hex, and KPL has
+     no hex parsing, no integer formatting, and no bit operations —
+     deliberately (§5.6). A plugin language that could decode it would be a much
+     larger thing to audit.
+
+*A composable match is not ownership.* Because `doctor` and `ports` claim every
+directory, `kap detect` and `kap build` had to learn the difference: a
+resolution with no *primary* is still "no plugin claims this directory", and
+both now say so rather than reporting a sidecar as the owner.
 
 ---
 
-### Milestone 10 — Polish + v1.0 ⬅ **next**
+### Milestone 10 — Polish + v1.0
 **Goal:** Usable by early adopters.
 
-- [ ] `dev` concurrency polish (colored prefixes, `-o` open-first-URL)
-- [ ] Shell completions (bash/zsh/fish)
-- [ ] `PLUGIN_API.md` generated from this doc's KPL section
-- [ ] `docker/dev-full.Dockerfile` with Rust, Node, Go for full bundle tests
-- [ ] Install script (`curl | sh` clones registry + installs binary)
-- [ ] v1.0 tag, registry published
+- [x] `dev` concurrency polish (coloured prefixes, `-o` open-first-URL)
+- [x] Shell completions (bash/zsh/fish)
+- [x] `PLUGIN_API.md`, from this document's KPL section
+- [x] `docker/dev-full.Dockerfile` with Rust, Node, Go, and Python/uv
+- [x] Install script (`curl | sh` builds and installs the binary, the bundled
+      plugins, and the registry index)
+- [x] v1.0
 
 **Exit criteria:** Install script works on Linux; docs cover plugin
-authoring, config reference, and Docker workflow.
+authoring, config reference, and Docker workflow. ✅ — `scripts/install.sh`
+verified end to end into a scratch prefix, and `./scripts/ci.sh` installs kap
+and runs the result under `env -i` on every build.
+
+**Notes.**
+
+*Completion scripts are generated, not committed.* The command lists they
+complete live in `core/main.cpp`, and a checked-in script is a second copy that
+drifts the first time someone adds a subcommand. Completion is static — the
+scripts never shell out to kap on Tab, which would make the shell feel broken
+the first time kap was slow.
+
+*`-o` costs the inherited terminal.* Opening the first URL means reading the
+output, which means piping it, which means a tool checking `isatty()` drops its
+colours. The trade is stated in the header and in the docs rather than hidden.
+
+*`Options::open_url` is a seam, not tidiness.* Before it existed, running the
+test suite opened real browser windows.
+
+*`scripts/ci-full.sh` exists because `ci.sh` structurally cannot cover one
+thing.* Golden-file tests prove a plugin emits the argv arrays it claims to;
+they cannot prove those arrays are ones the real tools accept. A plugin can
+emit `cargo buidl --release`, match its golden file perfectly, and be broken.
+ci-full.sh creates a real project of each of the six kinds and runs kap against
+it — 17 checks, all green against real toolchains.
+
+*The install script runs the test suite before installing.* A binary that does
+not pass its own tests should not land on someone's `PATH`.
+
+---
+
+## Roadmap status
+
+All eleven milestones are complete, and `core/version.hpp` reads 1.0.0.
+
+What a 1.x kap promises not to break: the §8 CLI surface, the §5 KPL language
+(with `api_version` as the escape hatch for the day it must), the §5.4
+CommandSpec contract that committed golden files are written against, and the
+§6.4 on-disk layout.
+
+Documentation, as the exit criteria require:
+
+| Document | Covers |
+|---|---|
+| `docs/usage.md` | Every command, flag, exit code, and environment variable |
+| `docs/configuration.md` | `kap.toml`, the four layers, hooks, the TOML subset |
+| `docs/plugins.md` | Writing, testing, installing, and publishing a plugin |
+| `docs/PLUGIN_API.md` | The KPL reference and grammar |
+| `docs/dockerusage.md` | Both container images and both CI scripts |
+| `plugins/*/README.md` | Every configuration key of every bundled plugin |
 
 ---
 
@@ -1363,8 +1460,10 @@ authoring, config reference, and Docker workflow.
 
 ## 12. Open Questions
 
-1. **Windows executor** — `posix_spawn` is POSIX-only. v1 targets Linux;
-   Windows needs a `CreateProcess` backend behind the same `Process` API.
+1. **Windows executor** — still open, and still post-v1 as §11's backlog says.
+   v1 targets Linux and macOS. `core/exec.hpp` is the whole surface that would
+   need a `CreateProcess` backend; nothing above it — the language, the
+   detection engine, the plugin manager — is POSIX-specific.
 2. ~~**Plugin API versioning**~~ — **answered in Milestone 4**: a hard error
    wherever the user named the plugin explicitly (`kap plugin
    install/doctor/test`), and a warn-and-skip during detection, so one too-new
@@ -1373,9 +1472,11 @@ authoring, config reference, and Docker workflow.
    in `index.toml`, over an in-tree SHA-256, and *enforced* rather than
    advisory. A signed index remains post-v1 (it needs key distribution a static
    git repository cannot provide).
-4. **`glob` implementation** — `std::filesystem` has no glob; roll a
-   minimal `fnmatch` wrapper via POSIX `fnmatch(3)` (allowed) vs. pure
-   C++ recursive directory walk.
+4. ~~**`glob` implementation**~~ — **answered in Milestone 1**: a hand-written
+   iterative matcher in `core/fs.hpp`, not `fnmatch(3)`. It is single-backtrack
+   and therefore O(pattern × text) with no recursion, which matters because
+   glob patterns come from plugins and §7 treats plugin input as untrusted — a
+   pathological pattern must not be able to hang kap or blow its stack.
 5. **TOML vs KPL for config** — user config stays TOML (familiar,
    editable); only plugins use KPL. Alternative: a `config.kpl` — rejected
    for v1 because TOML is better for non-programmers.
