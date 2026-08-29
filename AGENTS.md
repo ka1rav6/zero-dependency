@@ -7,10 +7,10 @@ Read this file before making any changes and follow every rule below.
 
 ## 1. Project overview
 
-- **Name:** zero-dependency
+- **Name:** `kap` ("know project, act"), in the `zero-dependency` repository.
 - **Goal:** Hackathon submission demonstrating software built with **zero external
   dependencies** — std library + POSIX APIs only.
-- **Language:** C++ (C++17 or newer as determined by the design doc).
+- **Language:** C++20 (`CMAKE_CXX_STANDARD 20`, no compiler extensions).
 
 ---
 
@@ -77,12 +77,28 @@ These rules apply without fail, in every change, no exceptions:
 - The container must be usable for building, testing, and running the project.
 - Document the recommended local build/test commands here (see below).
 
-### Build & test commands (defaults, adjust per design doc)
+### Build & test commands
+
+`scripts/ci.sh` is the single entry point: it configures, builds with
+`-DKAP_WERROR=ON`, runs the unit tests and the e2e suite, enforces
+`clang-format`, exercises every plugin, checks an install into a scratch
+prefix, and builds the `-DKAP_EMBED_PLUGINS=ON` variant. It is exactly what CI
+runs, so a green run here means a green run there.
 
 ```sh
-# Build (example — update to match the actual build system)
-cmake -S . -B build && cmake --build build
+# Everything CI does, in the pinned container (the recommended path)
+docker compose run --rm dev ./scripts/ci.sh
 
-# Run tests
-ctest --test-dir build
+# ...or on the host, if you have cmake, ninja, and clang-format
+./scripts/ci.sh
 ```
+
+For a faster inner loop:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_WERROR=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Run `./scripts/ci.sh` before calling any change finished.

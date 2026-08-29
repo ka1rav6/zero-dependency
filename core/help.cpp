@@ -518,7 +518,8 @@ WHERE PLUGINS LIVE
     <prefix>/share/kap/plugins/<name>/     installed alongside the binary
     ~/.cache/kap/embedded/<name>/          compiled into the binary, if this
                                            build has -DKAP_EMBED_PLUGINS=ON
-    ./plugins/<name>/                      a repo that develops plugins in-tree
+    ./kap-plugins/<name>/                  a repo that develops plugins in-tree
+    ./plugins/<name>/                      ...or the plainer name for the same
 )"},
 
         {"plugin list",

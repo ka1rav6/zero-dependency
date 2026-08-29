@@ -3,7 +3,7 @@
 #
 # One-command install for kap (design doc Milestone 10):
 #
-#     curl -fsSL https://raw.githubusercontent.com/kap-project/kap/main/scripts/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install.sh | sh
 #
 # It clones the repository, builds the binary, and installs it together with the
 # bundled plugins and the registry index — everything §6.5's third tier expects:
@@ -14,6 +14,15 @@
 #
 # kap finds those at run time from its own location, so an installed kap needs
 # no environment variables and no configuration to see its own plugins.
+#
+# It then copies the same plugins and index into the *user* tier:
+#
+#     ~/.local/share/kap/plugins/<name>/
+#     ~/.local/share/kap/registry/index.toml
+#
+# which every kap on the machine reads, not just the one under <prefix>. That
+# is what makes them installed globally rather than installed next to one
+# particular binary.
 #
 # ## Why it builds from source
 #
@@ -28,7 +37,7 @@
 
 set -eu
 
-REPO="${KAP_REPO:-https://github.com/kap-project/kap}"
+REPO="${KAP_REPO:-https://github.com/ka1rav6/zero-dependency}"
 REF="${KAP_REF:-main}"
 PREFIX="${KAP_PREFIX:-$HOME/.local}"
 BUILD_TYPE="${KAP_BUILD_TYPE:-Release}"
@@ -56,8 +65,9 @@ pipeline where there is nowhere to put a flag:
 ## --embed, and when you want it
 
 Without it, the plugins are installed as text files next to the binary, under
-<prefix>/share/kap/plugins. That is the ordinary packaging story, and it is what
-a distributor wants: the plugins are files a maintainer can see, diff, and
+<prefix>/share/kap/plugins, and again under ~/.local/share/kap/plugins where
+every kap on the machine looks. That is the ordinary packaging story, and it is
+what a distributor wants: the plugins are files a maintainer can see, diff, and
 patch.
 
 With it, the same plugins are compiled into the binary. `kap` becomes one
@@ -102,7 +112,7 @@ say "prefix:     $PREFIX"
 if [ "$EMBED" = "1" ]; then
     say "plugins:    compiled into the binary (--embed)"
 else
-    say "plugins:    installed as files under $PREFIX/share/kap/plugins"
+    say "plugins:    $PREFIX/share/kap/plugins and ~/.local/share/kap/plugins"
 fi
 
 # --- 2. Clone into a scratch directory that always gets cleaned up -------------
@@ -157,7 +167,47 @@ installed="$PREFIX/bin/kap"
 version="$("$installed" --version)"
 say "installed $version -> $installed"
 
-# --- 6. Tell the user what is left to do ----------------------------------------
+# --- 6. Put the plugins where *every* kap looks -----------------------------------
+# Step 5 wrote them to <prefix>/share/kap/plugins, which only the binary at
+# <prefix>/bin/kap can find (it locates them relative to itself). That is right
+# for packaging and wrong for the common case: a second kap — one built in a
+# checkout, one a colleague dropped in /usr/local/bin, one from a container —
+# sees nothing.
+#
+# ~/.local/share/kap/plugins is the user tier, checked by every kap on the
+# machine regardless of where its binary lives, so a copy here is what actually
+# makes "the plugins are installed" true. It also outranks the bundled tier, so
+# a plugin edited by hand there stays in charge after the next reinstall.
+#
+# Skipped under --embed: those plugins are inside the binary already, and
+# writing a second copy to disk would silently take precedence over it.
+if [ "$EMBED" = "1" ]; then
+    say "plugins:    inside the binary; nothing written to the user directory"
+elif [ -z "${HOME:-}" ] && [ -z "${XDG_DATA_HOME:-}" ]; then
+    say "no \$HOME and no \$XDG_DATA_HOME: skipping the user plugin directory"
+else
+    user_data="${XDG_DATA_HOME:-$HOME/.local/share}/kap"
+    say "installing plugins globally -> $user_data/plugins"
+    mkdir -p "$user_data/plugins" "$user_data/registry"
+    for plugin_dir in "$workdir/kap/kap-plugins"/*/; do
+        [ -f "$plugin_dir/plugin.kpl" ] || continue
+        name="$(basename "$plugin_dir")"
+        # Replace rather than merge: a stale plugin.kpl left over from an older
+        # version is the one failure mode a reinstall exists to fix.
+        rm -rf "$user_data/plugins/$name"
+        mkdir -p "$user_data/plugins/$name"
+        cp "$plugin_dir/plugin.kpl" "$user_data/plugins/$name/plugin.kpl"
+        [ -f "$plugin_dir/README.md" ] && cp "$plugin_dir/README.md" "$user_data/plugins/$name/"
+    done
+    # The index too, so `kap plugin search` works from any kap on the machine
+    # and not only from the one this script just installed.
+    cp "$workdir/kap/registry/index.toml" "$user_data/registry/index.toml"
+
+    global_count="$(ls -1 "$user_data/plugins" | wc -l | tr -d ' ')"
+    say "$global_count plugins available to every kap on this machine"
+fi
+
+# --- 7. Tell the user what is left to do ----------------------------------------
 case ":$PATH:" in
     *":$PREFIX/bin:"*) ;;
     *)

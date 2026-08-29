@@ -4,7 +4,7 @@
 // design doc §6.1 and Milestone 3's exit criterion).
 //
 // Each test builds a throwaway plugin tree under the system temp directory, so
-// nothing here depends on the repository's own plugins/ — those are covered
+// nothing here depends on the repository's own kap-plugins/ — those are covered
 // end to end by tests/e2e.sh instead.
 
 #include "core/diag.hpp"
@@ -107,6 +107,45 @@ KAP_TEST("discover returns nothing for a root with no plugins directory")
 {
     const std::filesystem::path root = scratch_root("empty");
     KAP_ASSERT(discover_only(root).empty());
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("the repository tier also reads kap-plugins/")
+{
+    // This repository's own plugins live in kap-plugins/ rather than plugins/,
+    // because a bare `plugins/` at the root of a tree that is mostly a C++
+    // compiler says nothing about whose plugins they are. Both names are the
+    // repository tier, so kap keeps working in either layout.
+    const std::filesystem::path root = scratch_root("kap-plugins-dir");
+    write_file(root / "kap-plugins" / "alpha" / "plugin.kpl", kEchoPlugin);
+
+    const auto found = discover_only(root);
+    KAP_ASSERT_EQ(found.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(found[0].name, std::string("alpha"));
+    KAP_ASSERT(found[0].source == kap::plugin::Source::Repository);
+
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("kap-plugins/ wins over plugins/ for the same name")
+{
+    // Same tier, two directories: the specific name is searched first, so a
+    // tree carrying both has one unambiguous answer rather than an ordering
+    // that depends on the filesystem.
+    const std::filesystem::path root = scratch_root("both-plugin-dirs");
+    write_file(root / "kap-plugins" / "echo" / "plugin.kpl", kEchoPlugin);
+    write_file(root / "plugins" / "echo" / "plugin.kpl", kEchoPlugin);
+    write_file(root / "plugins" / "only-plain" / "plugin.kpl", kEchoPlugin);
+
+    const auto found = discover_only(root);
+    KAP_ASSERT_EQ(found.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(found[0].name, std::string("echo"));
+    KAP_ASSERT_EQ(found[0].directory, root / "kap-plugins" / "echo");
+    // The plain directory is still searched, so a plugin only it defines is
+    // not lost to the shadowing rule.
+    KAP_ASSERT_EQ(found[1].name, std::string("only-plain"));
+    KAP_ASSERT_EQ(found[1].directory, root / "plugins" / "only-plain");
+
     std::filesystem::remove_all(root);
 });
 

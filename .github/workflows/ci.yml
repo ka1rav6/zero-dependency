@@ -10,6 +10,12 @@ on:
   push:
   pull_request:
 
+# This job only reads the tree. Saying so explicitly means a compromised
+# action — or a pull request from a fork — cannot use the job's token to write
+# to the repository, whatever the repository-wide default happens to be.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

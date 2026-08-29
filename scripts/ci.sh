@@ -14,6 +14,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Where the second, -DKAP_EMBED_PLUGINS=ON tree goes. Overridable because the
+# dev container points it outside the bind-mounted repo: the container runs as
+# root, so a build tree created inside the mount lands root-owned in the
+# developer's working copy and cannot be deleted without sudo.
+embed_build="${KAP_EMBED_BUILD_DIR:-$repo_root/build-embed}"
+
 echo "== configure ======================================================"
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_WERROR=ON
 
@@ -31,8 +37,8 @@ echo "== plugin checks =================================================="
 # `doctor` parses, manifest-validates, and type-checks each one; `test`
 # evaluates its fixture cases against committed golden CommandSpecs. Neither
 # executes a real build tool, so this stage needs no ecosystem toolchain.
-KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap plugin doctor --root .
-KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap plugin test --root .
+KAP_PLUGIN_PATH="$repo_root/kap-plugins" ./build/kap plugin doctor --root .
+KAP_PLUGIN_PATH="$repo_root/kap-plugins" ./build/kap plugin test --root .
 
 echo "== registry ======================================================="
 # The registry index is a real file this project ships (design doc §6.2). A
@@ -45,7 +51,7 @@ echo "== detection ======================================================"
 # plugin must claim it. This is the cheapest possible check that the detection
 # engine, plugin discovery, and the KPL loader agree with each other on a real
 # tree rather than only on synthetic fixtures.
-detected="$(KAP_PLUGIN_PATH="$repo_root/plugins" ./build/kap detect --refresh --root . | head -1)"
+detected="$(KAP_PLUGIN_PATH="$repo_root/kap-plugins" ./build/kap detect --refresh --root . | head -1)"
 case "$detected" in
     cmake-cpp*) echo "ci.sh: detect resolved '$detected'" ;;
     *) echo "ci.sh: expected detect to resolve cmake-cpp, got '$detected'" >&2; exit 1 ;;
@@ -82,10 +88,10 @@ echo "== embedded build ================================================="
 # The -DKAP_EMBED_PLUGINS=ON variant is a supported way to install kap, so it
 # has to keep building and keep passing its own tests. It is also the only
 # configuration where core/bundled.cpp's materialize path runs at all.
-cmake -S . -B build-embed -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_WERROR=ON \
+cmake -S . -B "$embed_build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DKAP_WERROR=ON \
       -DKAP_EMBED_PLUGINS=ON >/dev/null
-cmake --build build-embed >/dev/null
-ctest --test-dir build-embed --output-on-failure >/dev/null
+cmake --build "$embed_build" >/dev/null
+ctest --test-dir "$embed_build" --output-on-failure >/dev/null
 
 # The property that makes the embedded build worth having: a bare machine, no
 # plugin directory anywhere, no network — and kap still works. This is the exact
@@ -95,13 +101,13 @@ embed_home="$(mktemp -d)"
 embed_proj="$(mktemp -d)"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$embed_proj/CMakeLists.txt"
 embedded_plugins="$(env -i HOME="$embed_home" PATH="$PATH" \
-    "$repo_root/build-embed/kap" plugin list --root "$embed_proj" | wc -l | tr -d " ")"
+    "$embed_build/kap" plugin list --root "$embed_proj" | wc -l | tr -d " ")"
 if [ "$embedded_plugins" -lt 8 ]; then
     echo "ci.sh: an embedded kap found only $embedded_plugins plugins" >&2
     exit 1
 fi
 env -i HOME="$embed_home" PATH="$PATH" \
-    "$repo_root/build-embed/kap" build -n --root "$embed_proj" >/dev/null
+    "$embed_build/kap" build -n --root "$embed_proj" >/dev/null
 echo "ci.sh: an embedded kap builds a project on a bare machine ($embedded_plugins plugins)"
 rm -rf "$embed_home" "$embed_proj"
 
@@ -128,10 +134,10 @@ bash -n scripts/ci-full.sh
 # install-plugin.sh carries its own list of the first-party plugins, and a
 # plugin added to the tree without being added there is one nobody can install.
 script_plugins="$(sh scripts/install-plugin.sh --list | sort | tr "\n" " ")"
-tree_plugins="$(ls -1 plugins | sort | tr "\n" " ")"
+tree_plugins="$(ls -1 kap-plugins | sort | tr "\n" " ")"
 if [ "$script_plugins" != "$tree_plugins" ]; then
     echo "ci.sh: scripts/install-plugin.sh lists '$script_plugins'" >&2
-    echo "ci.sh: but plugins/ contains  '$tree_plugins'" >&2
+    echo "ci.sh: but kap-plugins/ contains  '$tree_plugins'" >&2
     exit 1
 fi
 
@@ -142,7 +148,7 @@ for plugin in $tree_plugins; do
         exit 1
     fi
 done
-echo "ci.sh: plugins/, install-plugin.sh, and registry/index.toml agree"
+echo "ci.sh: kap-plugins/, install-plugin.sh, and registry/index.toml agree"
 
 echo "== smoke tests ===================================================="
 # Milestone-0 contract: version banner, help, and a loud failure for any

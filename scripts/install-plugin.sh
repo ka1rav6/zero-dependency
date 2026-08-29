@@ -13,7 +13,7 @@
 # **You run it.** For a machine with no kap yet, or to install into an explicit
 # directory:
 #
-#     curl -fsSL https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh \
+#     curl -fsSL https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh \
 #       | sh -s -- cmake-cpp
 #
 #     # or all of them
@@ -37,10 +37,10 @@
 
 set -eu
 
-REPO_RAW="${KAP_PLUGIN_SOURCE:-https://raw.githubusercontent.com/kap-project/kap}"
+REPO_RAW="${KAP_PLUGIN_SOURCE:-https://raw.githubusercontent.com/ka1rav6/zero-dependency}"
 REF="${KAP_PLUGIN_REF:-main}"
 
-# Every first-party plugin. Keep in step with plugins/ and registry/index.toml;
+# Every first-party plugin. Keep in step with kap-plugins/ and registry/index.toml;
 # scripts/ci.sh checks that this list and the directory agree.
 ALL_PLUGINS="cargo-rust cmake-cpp doctor go make-generic node ports python-uv"
 
@@ -138,7 +138,7 @@ for name in $plugins; do
     say "fetching $name"
     got_manifest=0
     for file in $PLUGIN_FILES; do
-        url="$REPO_RAW/$REF/plugins/$name/$file"
+        url="$REPO_RAW/$REF/kap-plugins/$name/$file"
         # Download beside the target and move into place, so an interrupted
         # download cannot leave a half-written plugin.kpl that kap would then
         # try to parse.

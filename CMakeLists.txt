@@ -117,8 +117,8 @@ else()
 endif()
 
 file(GLOB_RECURSE KAP_PLUGIN_SOURCES CONFIGURE_DEPENDS
-     "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*/plugin.kpl"
-     "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*/README.md")
+     "${CMAKE_CURRENT_SOURCE_DIR}/kap-plugins/*/plugin.kpl"
+     "${CMAKE_CURRENT_SOURCE_DIR}/kap-plugins/*/README.md")
 
 # A custom command rather than a configure-time execute_process, so editing a
 # plugin.kpl or the index regenerates on the next build instead of needing a
@@ -126,7 +126,7 @@ file(GLOB_RECURSE KAP_PLUGIN_SOURCES CONFIGURE_DEPENDS
 add_custom_command(
     OUTPUT "${KAP_EMBEDDED_SOURCE}"
     COMMAND ${CMAKE_COMMAND}
-            -DPLUGIN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/plugins
+            -DPLUGIN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/kap-plugins
             -DREGISTRY_FILE=${CMAKE_CURRENT_SOURCE_DIR}/registry/index.toml
             -DEMBED_PLUGINS=${KAP_EMBED_PLUGINS}
             -DOUTPUT=${KAP_EMBEDDED_SOURCE}
@@ -184,7 +184,7 @@ install(TARGETS kap RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 # Only the plugin's own files, never its test fixtures: those are for plugin
 # authors and would roughly double what an install writes for no user benefit.
-install(DIRECTORY plugins/
+install(DIRECTORY kap-plugins/
         DESTINATION "${CMAKE_INSTALL_DATADIR}/kap/plugins"
         FILES_MATCHING
         PATTERN "*.kpl"

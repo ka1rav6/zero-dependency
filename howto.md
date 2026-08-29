@@ -14,7 +14,7 @@ Companion documents:
 | `docs/plugins.md` | Writing, testing, installing, and publishing a plugin. |
 | `docs/PLUGIN_API.md` | The KPL language reference and grammar. |
 | `docs/dockerusage.md` | The full Docker guide. |
-| `plugins/*/README.md` | Per-plugin user documentation (config keys, commands). |
+| `kap-plugins/*/README.md` | Per-plugin user documentation (config keys, commands). |
 | `howto.md` (this file) | How the code actually works, and how to work on it. |
 
 If this file and `docs/design.md` ever disagree, **the design doc wins** — and
@@ -110,7 +110,7 @@ tests/
   e2e.sh         end-to-end tests that drive the built binary
   fixtures/      sample input files
 
-plugins/         the eight first-party KPL plugins, each
+kap-plugins/     the eight first-party KPL plugins, each
                  plugin.kpl + README.md + tests/{fixtures,expected}
   cmake-cpp/ cargo-rust/ node/ go/ python-uv/ make-generic/   ecosystems
   doctor/ ports/                                              system plugins
@@ -157,7 +157,7 @@ best-effort, and it is why a plugin fetched from a git URL cannot run anything
 kap has not first rendered as an argv array it was willing to show you.
 
 **Nothing above `detect.cpp` knows any ecosystem.** Grep the binary for
-"cargo": it appears in `plugins/cargo-rust/plugin.kpl` and nowhere in `core/`.
+"cargo": it appears in `kap-plugins/cargo-rust/plugin.kpl` and nowhere in `core/`.
 
 The other two chains, for orientation:
 
@@ -529,10 +529,10 @@ Three rules the cache follows, and they are worth preserving if you touch it:
 ## 7. Writing a plugin
 
 A plugin is a directory with `plugin.kpl` and a `README.md`. Start from
-`plugins/cargo-rust/` — it is the smaller of the two.
+`kap-plugins/cargo-rust/` — it is the smaller of the two.
 
 ```
-plugins/my-tool/
+kap-plugins/my-tool/
 ├── plugin.kpl
 ├── README.md
 └── tests/
@@ -836,7 +836,7 @@ cmake --build build
 
 # Plugins
 ./build/kap plugin doctor --root .        # every plugin the search path finds
-./build/kap plugin doctor ./plugins/node  # or one directory, uninstalled
+./build/kap plugin doctor ./kap-plugins/node  # or one directory, uninstalled
 ./build/kap plugin test --root .
 ./build/kap plugin test cmake-cpp --root .
 
@@ -872,7 +872,7 @@ export KAP_PLUGIN_PATH="$PWD/plugins"
 | What can go in a `kap.toml`? | `docs/configuration.md` |
 | How do I write a plugin? | `docs/plugins.md` |
 | What does this KPL keyword do? | `docs/PLUGIN_API.md` |
-| What does this bundled plugin run? | `plugins/<name>/README.md` |
+| What does this bundled plugin run? | `kap-plugins/<name>/README.md` |
 | How does the container work? | `docs/dockerusage.md` |
 | What rules must my change follow? | `AGENTS.md` |
 | How does the code work? | this file |

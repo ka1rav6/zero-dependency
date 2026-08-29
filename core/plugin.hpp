@@ -29,7 +29,8 @@ enum class Source
     SearchPath,   // an entry of $KAP_PLUGIN_PATH
     User,         // ~/.local/share/kap/plugins/<name>/
     Bundled,      // <prefix>/share/kap/plugins/<name>/
-    Repository,   // <root>/plugins/<name>/  — see DiscoveryOptions::include_repository
+    Repository,   // <root>/kap-plugins/<name>/ or <root>/plugins/<name>/ — see
+                  // DiscoveryOptions::include_repository
     Embedded,     // compiled into the binary, materialized into the cache
 };
 

@@ -1,4 +1,0 @@
-(placeholder)
-# Milestone 8 fills this directory with first-party KPL plugins
-# (cmake-cpp, cargo-rust, node, ...). This file keeps the directory tracked
-# so the repo skeleton matches design doc §10.1 from commit one.

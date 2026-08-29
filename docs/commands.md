@@ -796,7 +796,7 @@ The bracket is **source/origin**:
 | `path` | a `$KAP_PLUGIN_PATH` entry |
 | `user` | `~/.local/share/kap/plugins/` |
 | `bundled` | `<prefix>/share/kap/plugins/` |
-| `repo` | `./plugins/` |
+| `repo` | `./kap-plugins/` or `./plugins/` |
 | `embedded` | compiled into the binary |
 
 | Origin — how it got there | |
@@ -1165,7 +1165,7 @@ Searched in this order; the first match for a given name wins.
 | 2 | path | each `$KAP_PLUGIN_PATH` entry |
 | 3 | user | `~/.local/share/kap/plugins/<name>/` |
 | 4 | bundled | `<prefix>/share/kap/plugins/<name>/` |
-| 5 | repo | `./plugins/<name>/` |
+| 5 | repo | `./kap-plugins/<name>/` or `./plugins/<name>/` |
 | 6 | embedded | `~/.cache/kap/embedded/<name>/` |
 
 **project** is committed with the repository, so a team shares a plugin without

@@ -295,8 +295,18 @@ std::vector<Located> discover(const DiscoveryOptions& options)
 
     // Then the repository's own plugins, so anything *installed* shadows the
     // in-repo copy of the same plugin.
-    if (options.include_repository && !options.project_root.empty())
+    //
+    // Two directory names, because two conventions are in use and neither is
+    // wrong. `kap-plugins/` is what this repository itself uses and what a
+    // project that only happens to carry plugins should prefer — a bare
+    // `plugins/` in a tree full of other things says nothing about whose
+    // plugins they are. `plugins/` stays supported because it is the obvious
+    // name and the one a dedicated plugin repository will reach for. The
+    // specific name is searched first so a tree with both is unambiguous.
+    if (options.include_repository && !options.project_root.empty()) {
+        collect_from(options.project_root / "kap-plugins", Source::Repository, found);
         collect_from(options.project_root / "plugins", Source::Repository, found);
+    }
 
     // Compiled-in plugins last of all. An embedded plugin is a snapshot taken
     // when the binary was compiled, which makes it the weakest claim there is:

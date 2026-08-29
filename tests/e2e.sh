@@ -289,7 +289,7 @@ expect_stderr_contains "a mismatch shows the expected spec" '"expected"' \
 detect_dir="$(mktemp -d)"
 mkdir -p "$detect_dir/proj"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$detect_dir/proj/CMakeLists.txt"
-export KAP_PLUGIN_PATH="$repo_root/plugins"
+export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 
 expect_status "detect exits 0 in a project it recognises" 0 detect --root "$detect_dir/proj"
 expect_stdout_contains "detect names the winning plugin" "cmake-cpp" \
@@ -439,7 +439,7 @@ rm -rf "$set_dir"
 # type check, KPL evaluation, executor — is exercised as one thing.
 
 proj="$(mktemp -d)"
-export KAP_PLUGIN_PATH="$repo_root/plugins"
+export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 cat > "$proj/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.16)
 project(kap_e2e_demo CXX)
@@ -570,7 +570,7 @@ rm -rf "$proj"
 
 sys_dir="$(mktemp -d)"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$sys_dir/CMakeLists.txt"
-export KAP_PLUGIN_PATH="$repo_root/plugins"
+export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 
 expect_stdout_contains "doctor names the plugins it checked" "plugin   cmake-cpp" \
     doctor --root "$sys_dir"
@@ -792,7 +792,7 @@ rm -rf "$comp_dir"
 # --- kap dev -o (Milestone 10) -------------------------------------------------------
 
 dev_dir="$(mktemp -d)"
-export KAP_PLUGIN_PATH="$repo_root/plugins"
+export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 cat > "$dev_dir/package.json" <<'JSON'
 {
   "name": "kap-e2e-dev",
@@ -843,7 +843,7 @@ expect_status "kap help with an unknown topic exits 1" 1 help frobnicate
 # --help after `--` belongs to the tool, not to kap.
 help_dir="$(mktemp -d)"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$help_dir/CMakeLists.txt"
-export KAP_PLUGIN_PATH="$repo_root/plugins"
+export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 expect_stdout_contains "--help after -- reaches the tool" "--help" \
     build -n --root "$help_dir" -- --help
 

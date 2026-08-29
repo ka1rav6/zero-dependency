@@ -82,4 +82,4 @@ Testing/
 # target/ stub. The rules above would silently swallow them — `git add` would
 # report nothing wrong and the plugin's tests would fail only for the next
 # person to clone. Unignore the whole fixture tree.
-!plugins/*/tests/fixtures/**
+!kap-plugins/*/tests/fixtures/**

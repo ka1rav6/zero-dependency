@@ -40,7 +40,7 @@ writing your own plugin, [plugins.md](plugins.md).
 ### The install script
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kap-project/kap/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install.sh | sh
 ```
 
 For a **single self-contained binary** — the plugins compiled in, nothing
@@ -57,6 +57,28 @@ files next to the binary, which is what a distribution package wants.
 It clones the repository, builds, **runs the test suite**, and installs into
 `~/.local` — the binary, the eight bundled plugins, and the registry index. A
 build that fails its own tests is not installed.
+
+#### Where the plugins end up
+
+Two places, on purpose:
+
+| Path | Who reads it |
+|---|---|
+| `<prefix>/share/kap/plugins/<name>/` | only the binary at `<prefix>/bin/kap`, which finds it relative to itself |
+| `~/.local/share/kap/plugins/<name>/` | every kap on the machine, wherever its binary lives |
+
+The first is the packaging layout, and it is the one a distribution wants. The
+second is what makes the plugins *installed globally*: a second kap — built in
+a checkout, dropped in `/usr/local/bin` by a colleague, copied out of a
+container — finds them without being told where to look. The user copy also
+outranks the packaged one, so a plugin you edit there stays in charge across
+reinstalls.
+
+`--embed` skips the user copy: those plugins are inside the binary already, and
+a second copy on disk would silently take precedence over it.
+
+`~/.local/share/kap/registry/index.toml` is written the same way, so
+`kap plugin search` works from any kap too.
 
 Options, as flags or as environment variables (the second form is what works
 through a `curl | sh` pipe):
@@ -79,7 +101,7 @@ times in a row.
 ### From source
 
 ```sh
-git clone https://github.com/kap-project/kap
+git clone https://github.com/ka1rav6/zero-dependency
 cd kap
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -289,7 +311,7 @@ not a broken one.
 `doctor` is itself a plugin. The core collects what every matched plugin
 declares in its `requires` block and hands the list over; the plugin decides
 what to print and what counts as healthy. See
-[plugins/doctor/README.md](../plugins/doctor/README.md).
+[kap-plugins/doctor/README.md](../kap-plugins/doctor/README.md).
 
 ---
 
@@ -407,9 +429,9 @@ Useful flags for `install`: `--yes` (skip the confirmation), `--project`
 ```console
 $ kap plugin install cargo-rust
 install 'cargo-rust' 1.0.0
-  source:      registry https://github.com/kap-project/kap
+  source:      registry https://github.com/ka1rav6/zero-dependency
   ref:         main
-  subdirectory: plugins/cargo-rust
+  subdirectory: kap-plugins/cargo-rust
   destination: /home/you/.local/share/kap/plugins/cargo-rust
   checksum:    verified
 
@@ -435,7 +457,8 @@ one of the same name, which shadows one that shipped with the binary:
 $KAP_PLUGIN_PATH                        colon-separated, for development
 ~/.local/share/kap/plugins/<name>/      kap plugin install
 <prefix>/share/kap/plugins/<name>/      shipped with the binary
-./plugins/<name>/                       a repository that develops plugins in-tree
+./kap-plugins/<name>/                   a repository that develops plugins in-tree
+./plugins/<name>/                       ...or the plainer name for the same
 ```
 
 ---

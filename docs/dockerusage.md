@@ -203,7 +203,7 @@ passes in CI but not on my machine" and its inverse are both impossible.
 | File | Role |
 |---|---|
 | `docker/dev.Dockerfile` | The pinned dev image (toolchain + entrypoint). |
-| `docker/entrypoint.sh` | Runs before each command; verifies `/kap` and exports `KAP_DEV=1`; `exec`s the user command. |
+| `docker/entrypoint.sh` | Runs before each command; verifies `/kap`, then `exec`s the user command. |
 | `scripts/bootstrap.sh` | Self-contained setup; `--check-deps` at image build, full configure+build+test when run manually. |
 | `docker/dev-full.Dockerfile` | The ecosystem image: `dev` plus Rust, Node, Go, and Python/uv. Behind the `full` compose profile. |
 | `scripts/ci.sh` | One-shot pipeline: configure → build → unit tests → e2e → format → plugin checks → detection → install → completions → smoke. |

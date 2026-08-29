@@ -50,55 +50,55 @@ description = "First-party kap plugins"
 [plugins.cmake-cpp]
 description = "Configure, build, test, and clean CMake projects"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/cmake-cpp"
+subdir = "kap-plugins/cmake-cpp"
 tags = ["c", "cpp", "cmake", "ninja", "make", "build"]
 
 [plugins.cargo-rust]
 description = "Build, test, lint, format, and clean Cargo projects"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/cargo-rust"
+subdir = "kap-plugins/cargo-rust"
 tags = ["rust", "cargo", "clippy", "rustfmt"]
 
 [plugins.make-generic]
 description = "Drive any project with a Makefile, using whichever targets it defines"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/make-generic"
+subdir = "kap-plugins/make-generic"
 tags = ["make", "makefile", "generic", "fallback"]
 
 [plugins.node]
 description = "npm, pnpm, yarn, and bun projects, with workspace-aware dev"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/node"
+subdir = "kap-plugins/node"
 tags = ["node", "javascript", "typescript", "npm", "pnpm", "yarn", "bun"]
 
 [plugins.go]
 description = "Build, test, vet, and format Go modules"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/go"
+subdir = "kap-plugins/go"
 tags = ["go", "golang", "gofmt"]
 
 [plugins.python-uv]
 description = "Python projects managed with uv"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/python-uv"
+subdir = "kap-plugins/python-uv"
 tags = ["python", "uv", "ruff", "pytest"]
 
 # --- system plugins (design doc §6.6, Milestone 9) ----------------------------
@@ -106,19 +106,19 @@ tags = ["python", "uv", "ruff", "pytest"]
 [plugins.doctor]
 description = "Check that the tools the matched plugins require are installed"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/doctor"
+subdir = "kap-plugins/doctor"
 tags = ["system", "diagnostics", "bundled"]
 
 [plugins.ports]
 description = "Show which local ports are listening and what is holding them"
 version = "1.0.0"
-install_script = "https://raw.githubusercontent.com/kap-project/kap/main/scripts/install-plugin.sh"
-url = "https://github.com/kap-project/kap"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
 ref = "main"
-subdir = "plugins/ports"
+subdir = "kap-plugins/ports"
 tags = ["system", "network", "bundled"]
 
 # --- bundles (design doc §6.2) ------------------------------------------------

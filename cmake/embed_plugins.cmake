@@ -24,7 +24,7 @@
 #
 # ## Why generate rather than commit the result
 #
-# The generated file is a copy of plugins/*/plugin.kpl. A committed copy is a
+# The generated file is a copy of kap-plugins/*/plugin.kpl. A committed copy is a
 # second source of truth that drifts the first time someone edits a plugin and
 # forgets — and the symptom would be a binary that behaves differently from the
 # repository it was built from. Generating at build time makes that impossible.

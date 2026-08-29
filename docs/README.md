@@ -30,14 +30,14 @@ ecosystem means writing one text file, not rebuilding kap.
 
 Per-plugin documentation — every configuration key, every command — lives in
 each plugin's own README, next to the plugin:
-[cmake-cpp](../plugins/cmake-cpp/README.md) ·
-[cargo-rust](../plugins/cargo-rust/README.md) ·
-[node](../plugins/node/README.md) ·
-[go](../plugins/go/README.md) ·
-[python-uv](../plugins/python-uv/README.md) ·
-[make-generic](../plugins/make-generic/README.md) ·
-[doctor](../plugins/doctor/README.md) ·
-[ports](../plugins/ports/README.md)
+[cmake-cpp](../kap-plugins/cmake-cpp/README.md) ·
+[cargo-rust](../kap-plugins/cargo-rust/README.md) ·
+[node](../kap-plugins/node/README.md) ·
+[go](../kap-plugins/go/README.md) ·
+[python-uv](../kap-plugins/python-uv/README.md) ·
+[make-generic](../kap-plugins/make-generic/README.md) ·
+[doctor](../kap-plugins/doctor/README.md) ·
+[ports](../kap-plugins/ports/README.md)
 
 ---
 
@@ -59,7 +59,7 @@ That is the project, not a constraint it works around.
 ## Ninety seconds
 
 ```console
-$ curl -fsSL https://raw.githubusercontent.com/kap-project/kap/main/scripts/install.sh | sh
+$ curl -fsSL https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install.sh | sh
 
 $ cd ~/code/my-project
 

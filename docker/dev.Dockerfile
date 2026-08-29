@@ -24,6 +24,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # dogfooded first-party plugins (Milestone 8+) can run inside the
     # container instead of only on the host.
     python3 \
+    # curl and python3 together are what tests/e2e.sh needs to serve a plugin
+    # installer over loopback and install from it. Without them that whole
+    # section silently SKIPs, so the installer-script path — the one place kap
+    # runs downloaded code — would be untested in CI and only ever exercised
+    # on a developer's laptop.
+    curl \
+    # The `ports` plugin declares `any_of [ss, lsof, netstat]`, and `doctor`
+    # fails when a matched plugin's requirement cannot be met. Both are
+    # sidecars that claim *every* directory, so without one of these three the
+    # suite's "doctor still works in a directory nothing owns" case fails here
+    # and passes on any normal Linux host — exactly the kind of divergence the
+    # pinned image exists to prevent. iproute2 provides `ss`.
+    iproute2 \
+    lsof \
+    net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # The bootstrap script is copied in *before* the repo is bind-mounted, so the

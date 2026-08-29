@@ -1275,7 +1275,7 @@ std::string readme_template(const std::string& name)
 {
     return "# " + name + R"(
 
-A [kap](https://github.com/kap-project/kap) plugin.
+A [kap](https://github.com/ka1rav6/zero-dependency) plugin.
 
 ## What it claims
 

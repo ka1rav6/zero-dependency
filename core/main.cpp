@@ -375,6 +375,9 @@ void report_no_plugins_anywhere(const std::filesystem::path& root)
         std::cerr << "      note:   path    : " << search << "\n";
     tier("user    ", kap::paths::user_plugin_dir());
     tier("bundled ", kap::paths::bundled_plugin_dir());
+    // Both repository layouts, because plugin::discover() searches both and a
+    // note that named only one would send someone to the wrong directory.
+    tier("repo    ", root / "kap-plugins");
     tier("repo    ", root / "plugins");
 
     std::cerr << "      note: to fix it, either:\n"
@@ -1170,7 +1173,7 @@ int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<
             if (index && index->find(source) != nullptr) {
                 std::cerr << "      note: '" << source
                           << "' is a first-party plugin. Other ways to get it:\n"
-                             "      note:   kap plugin install --link path/to/kap/plugins/"
+                             "      note:   kap plugin install --link path/to/kap/kap-plugins/"
                           << source
                           << "\n"
                              "      note:   cmake --install <build> --prefix ~/.local   "

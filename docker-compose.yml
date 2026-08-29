@@ -32,11 +32,17 @@ services:
       - .:/kap
       # Persistent scratch volumes keep the bind mount free of build junk.
       - kap-build:/kap/build
+      # scripts/ci.sh also configures a second, -DKAP_EMBED_PLUGINS=ON tree.
+      # It lives *outside* /kap, addressed by $KAP_EMBED_BUILD_DIR: the
+      # container runs as root, so anything it creates inside the bind mount —
+      # even an empty mountpoint — lands root-owned in the developer's working
+      # copy and cannot be removed without sudo.
+      - kap-embed-build:/kap-build-embed
       - kap-cache:/root/.cache/kap
       - kap-config:/root/.config/kap
     working_dir: /kap
     environment:
-      - KAP_DEV=1
+      - KAP_EMBED_BUILD_DIR=/kap-build-embed
     # Interactive defaults: keep stdin open with a TTY so you drop straight
     # into a working shell with history and colours.
     stdin_open: true
@@ -55,17 +61,20 @@ services:
     volumes:
       - .:/kap
       - kap-full-build:/kap/build
+      - kap-full-embed-build:/kap-build-embed
       - kap-full-cache:/root/.cache
       - kap-config:/root/.config/kap
     working_dir: /kap
     environment:
-      - KAP_DEV=1
+      - KAP_EMBED_BUILD_DIR=/kap-build-embed
     stdin_open: true
     tty: true
 
 volumes:
   kap-build:
+  kap-embed-build:
   kap-cache:
   kap-config:
   kap-full-build:
+  kap-full-embed-build:
   kap-full-cache:

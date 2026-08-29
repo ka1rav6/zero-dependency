@@ -727,7 +727,7 @@ kap plugin install cmake-cpp
 ```
 ~/.local/share/kap/
 ├── installed-plugins.toml
-├── plugins/
+├── kap-plugins/
 │   ├── cmake-cpp/
 │   │   ├── plugin.kpl
 │   │   └── README.md
@@ -857,7 +857,7 @@ kap/
 ├── .dockerignore
 ├── CMakeLists.txt
 ├── core/                   # C++ source
-├── plugins/                # first-party KPL plugins
+├── kap-plugins/            # first-party KPL plugins
 ├── registry/               # plugin index
 └── scripts/
     ├── in-docker.sh        # wrapper: `./scripts/in-docker.sh cmake --build build`
@@ -880,7 +880,6 @@ services:
       - kap-cache:/root/.cache/kap
     working_dir: /kap
     environment:
-      - KAP_DEV=1
     stdin_open: true
     tty: true
 
@@ -912,7 +911,7 @@ CMD ["bash"]
 
 ```bash
 # First time
-git clone https://github.com/kap-project/kap
+git clone https://github.com/ka1rav6/zero-dependency
 cd kap
 docker compose run --rm dev
 
@@ -925,7 +924,7 @@ cmake --build build
 ./scripts/in-docker.sh ctest --test-dir build
 
 # Iterate on a plugin
-kap plugin install --link ./plugins/cmake-cpp
+kap plugin install --link ./kap-plugins/cmake-cpp
 kap plugin test cmake-cpp
 ```
 
@@ -967,7 +966,7 @@ until the previous phase's exit criteria pass in Docker CI.
 ### Milestone 0 — Repo + Docker dev shell
 **Goal:** Anyone can clone and get a shell with pinned toolchain.
 
-- [x] Repository skeleton (`core/`, `plugins/`, `registry/`, `docker/`)
+- [x] Repository skeleton (`core/`, `kap-plugins/`, `registry/`, `docker/`)
 - [x] `docker/dev.Dockerfile`, `docker-compose.yml`, `scripts/in-docker.sh`
 - [x] Empty `kap` binary that prints version and exits 0
 - [x] In-tree test harness compiles and runs one smoke test
@@ -1015,7 +1014,7 @@ quoting round-trip is involved and no shell is ever invoked.
 - [x] Recursive-descent parser per §5.5 grammar
 - [x] AST nodes for all top-level blocks and statements
 - [x] `kap plugin doctor` reports parse errors with line/column
-- [x] Golden tests: parse all example plugins in `plugins/`
+- [x] Golden tests: parse all example plugins in `kap-plugins/`
 
 **Exit criteria:** Every `.kpl` fixture parses; malformed inputs produce
 diagnostics with line numbers. ✅
@@ -1080,7 +1079,7 @@ assertions, green under `./scripts/ci.sh`.
 
 `core/detect.hpp` is the engine; `core/plugin.hpp`'s `discover()` now
 implements §6.5's override precedence in full (project-local > $KAP_PLUGIN_PATH
-> user-installed > bundled > the repository's own `plugins/`), so Milestone 7
+> user-installed > bundled > the repository's own `kap-plugins/`), so Milestone 7
 only has to *write* into those directories, not teach anything how to find
 them. `core/paths.hpp` resolves every XDG location in one place.
 
@@ -1444,7 +1443,7 @@ Documentation, as the exit criteria require:
 | `docs/plugins.md` | Writing, testing, installing, and publishing a plugin |
 | `docs/PLUGIN_API.md` | The KPL reference and grammar |
 | `docs/dockerusage.md` | Both container images and both CI scripts |
-| `plugins/*/README.md` | Every configuration key of every bundled plugin |
+| `kap-plugins/*/README.md` | Every configuration key of every bundled plugin |
 
 ---
 

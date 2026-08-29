@@ -669,5 +669,5 @@ command clean(project, config) {
 ```
 
 The real thing, with more commands, is
-[plugins/cmake-cpp/plugin.kpl](../plugins/cmake-cpp/plugin.kpl). All eight
+[kap-plugins/cmake-cpp/plugin.kpl](../kap-plugins/cmake-cpp/plugin.kpl). All eight
 bundled plugins are written to be read.

@@ -15,8 +15,5 @@ if [ ! -f /kap/CMakeLists.txt ]; then
     echo "kap: /kap does not look like this repository (did the volume mount?)" >&2
 fi
 
-# Tells kap's own code (later milestones) that it is running in a dev build.
-export KAP_DEV="${KAP_DEV:-1}"
-
 # Hand control to the user's command; default CMD is `bash`.
 exec "$@"
