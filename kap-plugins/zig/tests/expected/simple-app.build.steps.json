@@ -1,0 +1,4 @@
+{
+  "command": "build",
+  "steps": [ { "cmd": ["zig", "build"] } ]
+}

@@ -1,0 +1,5 @@
+{
+  "command": "check",
+  "config": { "source_glob": "src/*.zig" },
+  "steps": [ { "cmd": ["zig", "ast-check", "src/root.zig"] } ]
+}

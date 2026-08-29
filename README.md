@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/script
 ```
 
 Clones, builds, **runs the test suite**, and installs the binary together with
-eight plugins and the registry index. A build that fails its own tests is not
+nine plugins and the registry index. A build that fails its own tests is not
 installed. Needs `git`, `cmake`, and a C++20 compiler.
 
 The plugins land twice: under `<prefix>/share/kap/` for the binary the script
@@ -91,6 +91,7 @@ The full surface is twelve commands — `build`, `check`, `ci`, `clean`, `dev`,
 | [`cmake-cpp`](kap-plugins/cmake-cpp/README.md) | `CMakeLists.txt` | Picks Ninja when it is installed |
 | [`cargo-rust`](kap-plugins/cargo-rust/README.md) | `Cargo.toml` | `kap ci` is fmt-check, clippy, test |
 | [`node`](kap-plugins/node/README.md) | `package.json` | Reads the lockfile for npm/pnpm/yarn/bun; workspace-aware `dev` |
+| [`zig`](kap-plugins/zig/README.md) | `build.zig`, `build.zig.zon` | Reads `build.zig` to see which steps exist before running one |
 | [`go`](kap-plugins/go/README.md) | `go.mod`, `go.work` | `-race` on by default; golangci-lint when present |
 | [`python-uv`](kap-plugins/python-uv/README.md) | `uv.lock`, `pyproject.toml` | Every command is `uv run`, so no venv to activate |
 | [`make-generic`](kap-plugins/make-generic/README.md) | `Makefile` | The fallback; every target is configurable |
@@ -162,7 +163,7 @@ core/                C++ source — the binary and the library it links
   exec                 the only place in kap that creates a process
   registry             the plugin manager: index, lockfile, install pipeline
   toml, json, sha256   in-tree parsers and hashing, because §9 permits no libraries
-kap-plugins/         the eight first-party plugins, each with fixture tests
+kap-plugins/         the nine first-party plugins, each with fixture tests
 registry/index.toml  the plugin registry
 tests/               unit tests (in-tree harness) and an end-to-end shell suite
 docker/, scripts/    the pinned dev container, CI, and the install script

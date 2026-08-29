@@ -109,7 +109,7 @@ kap: error: configuration for plugin 'cmake-cpp' is not usable
 
 To find out what a plugin accepts, read its README — every bundled plugin has
 one, listing every key, its type, its default, and what it means. The
-[docs index](README.md#start-here) links all eight.
+[docs index](README.md#start-here) links all nine.
 
 ### Configuring a plugin you do not use
 

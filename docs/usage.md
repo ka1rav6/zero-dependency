@@ -56,7 +56,7 @@ onto a machine you do not administer. The default installs the plugins as text
 files next to the binary, which is what a distribution package wants.
 
 It clones the repository, builds, **runs the test suite**, and installs into
-`~/.local` — the binary, the eight bundled plugins, and the registry index. A
+`~/.local` — the binary, the nine bundled plugins, and the registry index. A
 build that fails its own tests is not installed.
 
 #### Where the plugins end up
@@ -280,7 +280,7 @@ kap: error: no plugin claims /home/you/code/backend
       note: python-uv (priority 38)
       note:   ✗ file_exists "uv.lock"
       note:   ✗ file_exists "pyproject.toml"
-      note: considered: cargo-rust cmake-cpp doctor go make-generic node ports python-uv
+      note: considered: cargo-rust cmake-cpp doctor go make-generic node ports python-uv zig
 ```
 
 Each `✗` is a marker a plugin looked for and did not find. Above, the directory

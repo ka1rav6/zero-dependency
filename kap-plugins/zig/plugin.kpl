@@ -1,0 +1,137 @@
+// zig — build, test, run, and format Zig projects.
+//
+// Zig's build system is a Zig program: `build.zig` declares named steps, and
+// `zig build <step>` runs one. That means this plugin cannot know what a given
+// project can do without reading its build.zig — which is exactly what it does
+// before running `test`, `run`, or `check`, so a missing step is reported by
+// kap rather than by a build script failing halfway through.
+
+manifest {
+  name        = "zig"
+  version     = "1.0.0"
+  api_version = 1
+  priority    = 42
+  composable  = false
+  supersedes  = []
+}
+
+// `build.zig.zon` is listed too: a package that is only ever consumed as a
+// dependency may ship the manifest without a build script of its own.
+detect {
+  file_exists "build.zig"
+  file_exists "build.zig.zon"
+}
+
+requires {
+  any_of   [zig]
+  optional [zls]
+}
+
+schema {
+  // Maps to `-Doptimize=`. `debug` passes nothing, because Debug is what
+  // `zig build` does with no flag and saying so twice adds no information.
+  optimize: enum { debug, release_safe, release_fast, release_small } = debug
+
+  // The step each kap command asks for. Zig has conventions, not rules, so
+  // every one is overridable.
+  build_step: str = ""       // empty means the default (install) step
+  run_step:   str = "run"
+  test_step:  str = "test"
+  check_step: str = "check"
+
+  // Which files `lint` and the `check` fallback look at.
+  source_glob: str = "src/*.zig"
+
+  // `kap fmt --set check=true` reports instead of rewriting, for CI.
+  check: bool = false
+
+  // `--prefix` for `kap install`. Empty leaves zig's default (zig-out).
+  prefix: str = ""
+
+  // What `kap clean` removes. `.zig-cache` is the modern name and `zig-cache`
+  // the pre-0.12 one; both are listed so the plugin works either side of that
+  // rename without asking the user which Zig they have.
+  clean_paths: list<str> = ["zig-out", ".zig-cache", "zig-cache"]
+}
+
+command build(project, config, extra) {
+  let cmd = ["zig", "build"]
+  if config.build_step != "" { cmd = cmd + [config.build_step] }
+
+  let optimize = match config.optimize {
+    debug         => none,
+    release_safe  => "ReleaseSafe",
+    release_fast  => "ReleaseFast",
+    release_small => "ReleaseSmall",
+  }
+  if optimize != none { cmd = cmd + ["-Doptimize=" + optimize] }
+
+  step cmd + extra
+}
+
+command test(project, config, extra) {
+  // `zig build test` only works if build.zig declares a step by that name, and
+  // the failure otherwise is a Zig compile error inside the build script —
+  // accurate, but it buries the one fact that matters.
+  let build_text = project.read("build.zig")
+  if !contains(build_text, "\"" + config.test_step + "\"") {
+    fail "build.zig declares no \"" + config.test_step + "\" step, which is what 'kap test' runs"
+  }
+  step ["zig", "build", config.test_step] + extra
+}
+
+command run(project, config, extra) {
+  let build_text = project.read("build.zig")
+  if !contains(build_text, "\"" + config.run_step + "\"") {
+    fail "build.zig declares no \"" + config.run_step + "\" step, which is what 'kap run' runs"
+  }
+  // Everything after `--` goes to the program, not to the build, which is what
+  // `zig build run -- args` means to Zig as well.
+  step ["zig", "build", config.run_step] + extra
+}
+
+command check(project, config, extra) {
+  // Two answers, because Zig has no single "typecheck" command.
+  //
+  // A `check` step in build.zig is the community convention for exactly this
+  // (it is what ZLS documents for editor diagnostics), so prefer it. Without
+  // one, `zig ast-check` parses and checks every source file without emitting
+  // a binary — less thorough, but it needs nothing from the project and is
+  // still the cheapest way to catch a file that will not compile.
+  let build_text = project.read("build.zig")
+  if contains(build_text, "\"" + config.check_step + "\"") {
+    step ["zig", "build", config.check_step] + extra
+  } else {
+    for file in project.glob(config.source_glob) {
+      step ["zig", "ast-check", file] + extra
+    }
+  }
+}
+
+command fmt(project, config, extra) {
+  // Unlike gofmt, `zig fmt --check` exits non-zero when something is
+  // misformatted, so this works in CI without inspecting the output.
+  let flags = if config.check then ["--check"] else []
+  step ["zig", "fmt"] + flags + ["."] + extra
+}
+
+command lint(project, config, extra) {
+  // Zig ships no linter. `ast-check` is the closest thing: it reports syntax
+  // errors and AST-level problems without building. Calling it `lint` is a
+  // small stretch, and better than leaving `kap lint` undefined in a Zig
+  // project where the honest answer is "run this".
+  for file in project.glob(config.source_glob) {
+    step ["zig", "ast-check", file] + extra
+  }
+}
+
+command install(project, config, extra) {
+  let cmd = ["zig", "build", "install"]
+  if config.prefix != "" { cmd = cmd + ["--prefix", config.prefix] }
+  step cmd + extra
+}
+
+command clean(project, config) {
+  step ["rm", "-rf"] + config.clean_paths
+  report_freed_space
+}

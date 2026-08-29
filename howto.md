@@ -110,7 +110,7 @@ tests/
   e2e.sh         end-to-end tests that drive the built binary
   fixtures/      sample input files
 
-kap-plugins/     the eight first-party KPL plugins, each
+kap-plugins/     the nine first-party KPL plugins, each
                  plugin.kpl + README.md + tests/{fixtures,expected}
   cmake-cpp/ cargo-rust/ node/ go/ python-uv/ make-generic/   ecosystems
   doctor/ ports/                                              system plugins

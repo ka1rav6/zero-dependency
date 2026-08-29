@@ -1,0 +1,5 @@
+{
+  "command": "clean",
+  "report_freed_space": true,
+  "steps": [ { "cmd": ["rm", "-rf", "zig-out", ".zig-cache", "zig-cache"] } ]
+}

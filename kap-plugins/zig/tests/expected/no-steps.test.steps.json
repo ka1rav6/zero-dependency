@@ -1,0 +1,5 @@
+{
+  "command": "test",
+  "failure": "build.zig declares no \"test\" step, which is what 'kap test' runs",
+  "steps": []
+}

@@ -1,0 +1,5 @@
+{
+  "command": "fmt",
+  "config": { "check": true },
+  "steps": [ { "cmd": ["zig", "fmt", "--check", "."] } ]
+}

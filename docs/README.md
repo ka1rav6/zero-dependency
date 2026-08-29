@@ -33,6 +33,7 @@ each plugin's own README, next to the plugin:
 [cmake-cpp](../kap-plugins/cmake-cpp/README.md) ·
 [cargo-rust](../kap-plugins/cargo-rust/README.md) ·
 [node](../kap-plugins/node/README.md) ·
+[zig](../kap-plugins/zig/README.md) ·
 [go](../kap-plugins/go/README.md) ·
 [python-uv](../kap-plugins/python-uv/README.md) ·
 [make-generic](../kap-plugins/make-generic/README.md) ·

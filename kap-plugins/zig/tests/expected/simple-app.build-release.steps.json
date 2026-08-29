@@ -1,0 +1,5 @@
+{
+  "command": "build",
+  "config": { "optimize": "release_fast" },
+  "steps": [ { "cmd": ["zig", "build", "-Doptimize=ReleaseFast"] } ]
+}

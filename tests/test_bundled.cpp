@@ -100,7 +100,23 @@ KAP_TEST("an embedded build carries every first-party plugin, with a manifest")
         return;
     }
 
-    KAP_ASSERT_EQ(kap::bundled::plugins().size(), static_cast<std::size_t>(8));
+    // Named rather than counted. A bare number tells you the build embedded
+    // the wrong many; a list tells you which one went missing, and makes
+    // adding a plugin a deliberate edit here rather than a silent +1.
+    for (const char* name : {"cargo-rust",
+                             "cmake-cpp",
+                             "doctor",
+                             "go",
+                             "make-generic",
+                             "node",
+                             "ports",
+                             "python-uv",
+                             "zig"}) {
+        if (kap::bundled::find(name) == nullptr)
+            ::kap_test::fail_test(
+                __FILE__, __LINE__, std::string("no embedded plugin named '") + name + "'");
+    }
+    KAP_ASSERT_EQ(kap::bundled::plugins().size(), static_cast<std::size_t>(9));
     for (const kap::bundled::Plugin& plugin : kap::bundled::plugins()) {
         bool has_manifest = false;
         for (const kap::bundled::File& file : plugin.files) {
