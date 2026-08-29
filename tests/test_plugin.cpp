@@ -294,8 +294,7 @@ manifest {
 detect {
   file_exists "CMakeLists.txt"
 }
-)"
-    );
+)");
     write_file(root / "plugins" / "cargo-rust" / "plugin.kpl",
                R"(
 manifest {
@@ -307,8 +306,7 @@ manifest {
 detect {
   file_exists "Cargo.toml"
 }
-)"
-    );
+)");
 
     const auto matches = kap::plugin::detect(root);
     KAP_ASSERT_EQ(matches.size(), static_cast<std::size_t>(1));
@@ -335,8 +333,7 @@ manifest {
 detect {
   file_exists "marker.txt"
 }
-)"
-    );
+)");
     write_file(root / "plugins" / "special" / "plugin.kpl",
                R"(
 manifest {
@@ -348,8 +345,7 @@ manifest {
 detect {
   file_exists "marker.txt"
 }
-)"
-    );
+)");
 
     const auto matches = kap::plugin::detect(root);
     KAP_ASSERT_EQ(matches.size(), static_cast<std::size_t>(1));

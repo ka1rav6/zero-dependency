@@ -280,10 +280,10 @@ std::vector<std::string> manifest_string_list(const kpl::Plugin& plugin, const c
     return result;
 }
 
-bool is_rule_satisfied(const std::filesystem::path& root,
-                       const std::string&          rule_name,
+bool is_rule_satisfied(const std::filesystem::path&  root,
+                       const std::string&            rule_name,
                        const std::vector<kpl::Expr>& expressions,
-                       std::vector<std::string>& matched_files)
+                       std::vector<std::string>&     matched_files)
 {
     if (rule_name == "file_exists") {
         if (expressions.size() != 1 || expressions.front().kind != kpl::Expr::Kind::String)
@@ -361,7 +361,7 @@ std::vector<std::string> cached_match_names(const std::filesystem::path& cache_p
         const json::Value doc = json::parse(fs::read_text(cache_path), cache_path.string());
         if (doc.kind != json::Value::Kind::Object)
             return {};
-        const json::Value* root_value = doc.find("root");
+        const json::Value* root_value  = doc.find("root");
         const json::Value* names_value = doc.find("plugins");
         if (root_value == nullptr || root_value->kind != json::Value::Kind::String ||
             names_value == nullptr || names_value->kind != json::Value::Kind::Array)
@@ -381,10 +381,10 @@ std::vector<std::string> cached_match_names(const std::filesystem::path& cache_p
     }
 }
 
-void write_detection_cache(const std::filesystem::path& root,
+void write_detection_cache(const std::filesystem::path&       root,
                            const std::vector<DetectionMatch>& matches)
 {
-    const std::filesystem::path cache_dir = root / ".kap";
+    const std::filesystem::path cache_dir  = root / ".kap";
     const std::filesystem::path cache_path = cache_dir / "cache.json";
     std::filesystem::create_directories(cache_dir);
     std::vector<json::Value> plugins;
@@ -396,7 +396,7 @@ void write_detection_cache(const std::filesystem::path& root,
         {"root", json::make_string(root.string())},
         {"plugins", json::make_array(std::move(plugins))},
     });
-    std::ofstream out(cache_path, std::ios::binary | std::ios::trunc);
+    std::ofstream     out(cache_path, std::ios::binary | std::ios::trunc);
     out << json::write(doc, true);
 }
 
@@ -413,8 +413,8 @@ std::vector<DetectionMatch> detect(const std::filesystem::path& root)
             if (it != cached.end()) {
                 DetectionMatch match;
                 match.located = located;
-                match.score   = manifest_integer(kapc::load(located.manifest, {}).plugin, "priority")
-                                    .value_or(0);
+                match.score = manifest_integer(kapc::load(located.manifest, {}).plugin, "priority")
+                                  .value_or(0);
                 result.push_back(match);
             }
         }
@@ -424,26 +424,27 @@ std::vector<DetectionMatch> detect(const std::filesystem::path& root)
     std::vector<DetectionMatch> matches;
     for (const Located& located : discover(root)) {
         try {
-            const kpl::Plugin plugin = kapc::load(located.manifest, {}).plugin;
+            const kpl::Plugin        plugin   = kapc::load(located.manifest, {}).plugin;
             const std::optional<int> priority = manifest_integer(plugin, "priority");
             if (!priority)
                 continue;
 
             std::vector<std::string> matched_files;
-            bool matched = false;
+            bool                     matched = false;
             if (plugin.detect) {
                 for (const kpl::Statement& statement : plugin.detect->statements) {
                     if (statement.kind != kpl::Statement::Kind::Directive)
                         continue;
-                    if (is_rule_satisfied(root, statement.name, statement.expressions, matched_files)) {
+                    if (is_rule_satisfied(
+                            root, statement.name, statement.expressions, matched_files)) {
                         matched = true;
                     }
                 }
             }
             if (matched) {
                 DetectionMatch match;
-                match.located = located;
-                match.score   = *priority;
+                match.located       = located;
+                match.score         = *priority;
                 match.matched_files = matched_files;
                 matches.push_back(match);
             }
@@ -459,8 +460,8 @@ std::vector<DetectionMatch> detect(const std::filesystem::path& root)
         for (const DetectionMatch& other : matches) {
             if (&candidate == &other)
                 continue;
-            const std::vector<std::string> others = manifest_string_list(
-                kapc::load(other.located.manifest, {}).plugin, "supersedes");
+            const std::vector<std::string> others =
+                manifest_string_list(kapc::load(other.located.manifest, {}).plugin, "supersedes");
             if (std::find(others.begin(), others.end(), candidate.located.name) != others.end()) {
                 superseded = true;
                 break;
@@ -475,7 +476,8 @@ std::vector<DetectionMatch> detect(const std::filesystem::path& root)
         return {};
     }
 
-    std::sort(survivors.begin(), survivors.end(),
+    std::sort(survivors.begin(),
+              survivors.end(),
               [](const DetectionMatch& left, const DetectionMatch& right) {
                   if (left.score != right.score)
                       return left.score > right.score;
@@ -483,8 +485,8 @@ std::vector<DetectionMatch> detect(const std::filesystem::path& root)
               });
     if (survivors.size() > 1 && survivors.front().score == survivors[1].score) {
         throw diag::Error{diag::error("detection tie: multiple plugins match at priority " +
-                                     std::to_string(survivors.front().score) +
-                                     "; pin one in kap.toml")};
+                                      std::to_string(survivors.front().score) +
+                                      "; pin one in kap.toml")};
     }
 
     write_detection_cache(root, survivors);

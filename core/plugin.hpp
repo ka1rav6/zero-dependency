@@ -45,7 +45,7 @@ struct CaseResult
 // One plugin that matched the detection rules in a project root.
 struct DetectionMatch
 {
-    Located located;
+    Located                  located;
     std::vector<std::string> matched_files;
     int                      score = 0;
 };
