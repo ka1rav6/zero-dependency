@@ -2,15 +2,47 @@
   "fixture": "any-project",
   "command": "doctor",
   "config": {
-    "matched_plugins": ["ports"],
-    "required_tools": ["ss,lsof,netstat"],
+    "matched_plugins": [
+      "ports"
+    ],
+    "required_tools": [
+      "ss,lsof,netstat"
+    ],
     "optional_tools": []
   },
-  "tools": ["lsof"],
+  "tools": [
+    "lsof"
+  ],
   "steps": [
-    { "cmd": ["echo", "kap doctor"] },
-    { "cmd": ["echo", "  plugin   ports"] },
-    { "cmd": ["echo", "  ok       lsof"] },
-    { "cmd": ["echo", "healthy"] }
+    {
+      "cmd": [
+        "echo",
+        "  ports"
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        ""
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        "  ok  lsof                required"
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        ""
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        "  healthy    every required tool is present"
+      ]
+    }
   ]
 }

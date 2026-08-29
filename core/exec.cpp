@@ -5,11 +5,14 @@
 
 #include "core/exec.hpp"
 
+#include "core/style.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <string_view>
@@ -545,12 +548,36 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
     // message is the whole result, and because any steps accumulated before
     // the `fail` were never going to run.
     if (spec.failure.has_value()) {
-        std::ostream& err = err_stream(options);
-        err << "kap: error: " << *spec.failure << "\n";
+        std::ostream&        err = err_stream(options);
+        const style::Palette c   = style::for_stderr();
+
+        // A `fail` message may be several lines: the first states the problem,
+        // the rest show what to do about it. Continuation lines are indented to
+        // the width of "error: " so the whole block reads as one message rather
+        // than as several unrelated ones.
+        const std::string& text  = *spec.failure;
+        std::size_t        start = 0;
+        bool               first = true;
+        while (start <= text.size()) {
+            const std::size_t end = text.find('\n', start);
+            const std::string line =
+                text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            if (first)
+                err << c.red << c.bold << "error" << c.reset << ": " << line << "\n";
+            else if (line.empty())
+                err << "\n";
+            else
+                err << "       " << c.dim << line << c.reset << "\n";
+            first = false;
+            if (end == std::string::npos)
+                break;
+            start = end + 1;
+        }
+
         if (options.dry_run && !spec.steps.empty()) {
-            err << "      note: the plan stopped here; it would have run:\n";
+            err << "\n  " << c.dim << "the plan stopped here; it would have run" << c.reset << "\n";
             for (const kpl::Step& step : spec.steps)
-                err << "      note:   " << render_step(step, options) << "\n";
+                err << "    " << c.dim << "$ " << c.reset << render_step(step, options) << "\n";
         }
         err.flush();
         outcome.exit_code = 1;
@@ -563,18 +590,40 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
     // --dry-run: render and stop (§7). Nothing below this point runs.
     if (options.dry_run) {
         std::ostream& out = out_stream(options);
-        for (const kpl::Step& step : spec.steps) {
+
+        // A header, because the steps alone never said who chose them. The
+        // `$ ` gutter stays: these lines are meant to be pasteable, and a
+        // numbered column would break that. The number goes in the dim gutter
+        // beside it instead, where it reads as an index rather than as input.
+        if (!options.command_name.empty()) {
+            const char* dim   = options.color ? kDim : "";
+            const char* reset = options.color ? kReset : "";
+            out << dim << "  kap " << options.command_name;
+            if (!options.plugin_name.empty())
+                out << " \u00b7 " << options.plugin_name;
+            out << " \u00b7 " << spec.steps.size() << (spec.steps.size() == 1 ? " step" : " steps");
+            out << "   \u2014 nothing will run" << reset << "\n\n";
+        }
+
+        const std::size_t total = spec.steps.size();
+        for (std::size_t i = 0; i < total; ++i) {
+            const kpl::Step& step = spec.steps[i];
             if (options.color)
-                out << kDim << "$ " << kReset;
+                out << kDim;
+            // Numbered only when there is more than one: "1" above a single
+            // command is decoration, not information.
+            if (total > 1)
+                out << ' ' << std::setw(2) << (i + 1) << ' ';
             else
-                out << "$ ";
+                out << "    ";
+            out << "$ " << (options.color ? kReset : "");
             out << render_step(step, options) << '\n';
         }
         if (spec.concurrent && spec.steps.size() > 1)
-            out << (options.color ? kDim : "") << "# the steps above run concurrently"
+            out << (options.color ? kDim : "") << "    the steps above run concurrently"
                 << (options.color ? kReset : "") << '\n';
         if (spec.report_freed_space)
-            out << (options.color ? kDim : "") << "# freed space would be reported"
+            out << (options.color ? kDim : "") << "    freed space would be reported"
                 << (options.color ? kReset : "") << '\n';
         out.flush();
         return outcome;

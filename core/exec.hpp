@@ -112,6 +112,13 @@ struct Options
     // it happened while these tests were being written.
     std::function<bool(const std::string&)> open_url;
 
+    // Who decided on these steps, for the dry-run header. When the printed
+    // commands surprise you, "which plugin chose this?" is the next question,
+    // and the answer used to require a second `kap detect`. Empty omits the
+    // header, which is what the unit tests and hook rendering want.
+    std::string command_name;
+    std::string plugin_name;
+
     // Where kap's own narration goes. The child's output is not routed through
     // these — a sequential child writes straight to the inherited descriptors.
     std::ostream* out = nullptr; // defaults to std::cout

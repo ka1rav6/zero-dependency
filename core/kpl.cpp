@@ -1613,6 +1613,7 @@ private:
             {"contains", {{StaticType::String, StaticType::String}, StaticType::Boolean}},
             {"trim", {{StaticType::String}, StaticType::String}},
             {"split", {{StaticType::String, StaticType::String}, StaticType::ListString}},
+            {"pad", {{StaticType::String, StaticType::Integer}, StaticType::String}},
         };
         return kFunctions;
     }
@@ -2326,6 +2327,28 @@ private:
             while (end > begin && space(static_cast<unsigned char>(text[end - 1])))
                 --end;
             return Value::string_value(text.substr(begin, end - begin));
+        }
+        if (name.text == "pad") {
+            check_arity(arguments, 2, name);
+            const std::string& text = string_argument(arguments, 0, name);
+            if (arguments[1].kind != Value::Kind::Integer)
+                fail("pad's second argument must be an integer, got " +
+                         std::string(kind_name(arguments[1].kind)),
+                     name);
+            // Counts UTF-8 code points, not bytes: a plugin padding a column
+            // that contains a non-ASCII name would otherwise indent by the
+            // encoded length and misalign exactly the rows it was called for.
+            // Never truncates — a name wider than the column pushes its row out
+            // rather than losing characters.
+            std::size_t width = 0;
+            for (const unsigned char c : text)
+                if ((c & 0xC0) != 0x80)
+                    ++width;
+            const std::int64_t target = arguments[1].integer;
+            if (target <= 0 || width >= static_cast<std::size_t>(target))
+                return Value::string_value(text);
+            return Value::string_value(text +
+                                       std::string(static_cast<std::size_t>(target) - width, ' '));
         }
         if (name.text == "split") {
             check_arity(arguments, 2, name);

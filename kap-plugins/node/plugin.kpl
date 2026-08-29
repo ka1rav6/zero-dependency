@@ -185,7 +185,9 @@ command run(project, config, extra) {
   let manifest_text = project.read("package.json")
   if !contains(manifest_text, "\"" + config.start_script + "\":") {
     fail "package.json declares no \"" + config.start_script + "\" script, which is what 'kap run' runs" +
-         (if contains(manifest_text, "\"dev\":") then "; this project has a \"dev\" script — try 'kap dev'" else "")
+         (if contains(manifest_text, "\"dev\":")
+          then "\n\n  this project has a \"dev\" script\n    kap dev"
+          else "")
   }
   step [pm, "run", config.start_script] + extra
 }

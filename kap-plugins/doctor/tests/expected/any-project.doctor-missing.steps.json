@@ -2,16 +2,50 @@
   "fixture": "any-project",
   "command": "doctor",
   "config": {
-    "matched_plugins": ["cargo-rust"],
-    "required_tools": ["cargo"],
+    "matched_plugins": [
+      "cargo-rust"
+    ],
+    "required_tools": [
+      "cargo"
+    ],
     "optional_tools": []
   },
   "tools": [],
   "steps": [
-    { "cmd": ["echo", "kap doctor"] },
-    { "cmd": ["echo", "  plugin   cargo-rust"] },
-    { "cmd": ["echo", "  MISSING  cargo  (required)"] },
-    { "cmd": ["echo", "unhealthy: install the tools marked MISSING above"] },
-    { "cmd": ["false"] }
+    {
+      "cmd": [
+        "echo",
+        "  cargo-rust"
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        ""
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        "  XX  cargo               required  MISSING"
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        ""
+      ]
+    },
+    {
+      "cmd": [
+        "echo",
+        "  unhealthy  a required tool is missing - install the rows marked MISSING"
+      ]
+    },
+    {
+      "cmd": [
+        "false"
+      ]
+    }
   ]
 }

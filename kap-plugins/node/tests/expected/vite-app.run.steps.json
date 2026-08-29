@@ -1,5 +1,5 @@
 {
   "command": "run",
-  "failure": "package.json declares no \"start\" script, which is what 'kap run' runs; this project has a \"dev\" script — try 'kap dev'",
-  "steps": []
+  "steps": [],
+  "failure": "package.json declares no \"start\" script, which is what 'kap run' runs\n\n  this project has a \"dev\" script\n    kap dev"
 }

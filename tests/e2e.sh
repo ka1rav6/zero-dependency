@@ -324,7 +324,7 @@ expect_status "removing the marker makes detection fail again" 1 detect --root "
 mkdir -p "$detect_dir/empty"
 expect_status "detect exits 1 where nothing matches" 1 detect --root "$detect_dir/empty"
 expect_empty_stdout "a failed detect writes nothing to stdout" detect --root "$detect_dir/empty"
-expect_stderr_contains "a failed detect says which plugins were considered" "considered:" \
+expect_stderr_contains "a failed detect says which plugins were considered" "considered" \
     detect --root "$detect_dir/empty"
 
 # A tie is refused rather than guessed at (design doc §3.2 step 4), and the
@@ -550,7 +550,7 @@ empty_proj="$(mktemp -d)"
 expect_status "a directory no plugin claims exits 1" 1 build --root "$empty_proj"
 expect_stderr_contains "it says nothing owns the directory" "no plugin claims" \
     build --root "$empty_proj"
-expect_stderr_contains "it says which plugins were considered" "considered:" \
+expect_stderr_contains "it says which plugins were considered" "considered" \
     build --root "$empty_proj"
 rm -rf "$empty_proj"
 
@@ -572,17 +572,17 @@ sys_dir="$(mktemp -d)"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$sys_dir/CMakeLists.txt"
 export KAP_PLUGIN_PATH="$repo_root/kap-plugins"
 
-expect_stdout_contains "doctor names the plugins it checked" "plugin   cmake-cpp" \
+expect_stdout_contains "doctor names the plugins it checked" "cmake-cpp" \
     doctor --root "$sys_dir"
 expect_stdout_contains "doctor reports the tools cmake-cpp requires" "cmake" \
     doctor --root "$sys_dir"
-expect_stdout_contains "doctor marks optional tools as optional" "(optional" \
+expect_stdout_contains "doctor marks optional tools as optional" "optional" \
     doctor --root "$sys_dir"
 
 # The injection is the whole Milestone-9 mechanism: a tool no plugin could
 # possibly have declared must be reportable purely by setting the config key.
 expect_stdout_contains "an injected required tool that is absent is reported MISSING" \
-    "MISSING  kap-no-such-tool-xyz" \
+    "kap-no-such-tool-xyz  required  MISSING" \
     doctor --root "$sys_dir" --set required_tools=kap-no-such-tool-xyz
 expect_status "doctor exits non-zero when a required tool is missing" 1 \
     doctor --root "$sys_dir" --set required_tools=kap-no-such-tool-xyz
@@ -597,7 +597,7 @@ cat > "$sys_dir/kap.toml" <<'TOML'
 [plugins.doctor]
 required_tools = ["kap-nope,sh"]
 TOML
-expect_stdout_contains "an any_of group is satisfied by one member" "ok       sh" \
+expect_stdout_contains "an any_of group is satisfied by one member" "ok  sh" \
     doctor --root "$sys_dir"
 expect_status "a satisfied any_of group exits 0" 0 doctor --root "$sys_dir"
 

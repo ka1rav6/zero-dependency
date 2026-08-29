@@ -1,5 +1,5 @@
 {
   "command": "run",
-  "failure": "set main_class to tell 'kap run' which class to execute: kap run --set main_class=com.example.Main, or [plugins.java] main_class = \"com.example.Main\" in kap.toml",
-  "steps": []
+  "steps": [],
+  "failure": "'kap run' needs a main class\nMaven has no notion of \"the\" main class, and exec:java without one fails\ninside the plugin complaining about a missing parameter.\n\n  once     kap run --set main_class=com.example.Main\n  always   kap.toml\n             [plugins.java]\n             main_class = \"com.example.Main\""
 }

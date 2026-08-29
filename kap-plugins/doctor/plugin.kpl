@@ -65,13 +65,17 @@ schema {
 }
 
 command doctor(project, config) {
-  step ["echo", "kap doctor"]
-
-  // Which plugins are in play. Worth printing even when everything is fine:
-  // "doctor says I'm healthy" means much less if you do not know what it
-  // checked.
+  // Which plugins are in play, on one line. Worth printing even when everything
+  // is fine: "doctor says I'm healthy" means much less if you do not know what
+  // it checked. One row per plugin used to interleave with the tool rows below,
+  // so the two lists read as one confusing column.
+  let plugin_line = ""
   for name in config.matched_plugins {
-    step ["echo", "  plugin   " + name]
+    plugin_line = if plugin_line == "" then name else plugin_line + ", " + name
+  }
+  if plugin_line != "" {
+    step ["echo", "  " + plugin_line]
+    step ["echo", ""]
   }
 
   // Required tools, one `any_of` group at a time.
@@ -93,13 +97,13 @@ command doctor(project, config) {
     }
 
     if found != "" {
-      step ["echo", "  ok       " + found]
+      step ["echo", "  ok  " + pad(found + "  ", 20) + "required"]
     } else {
       missing = missing + [group]
       if len(names) > 1 {
-        step ["echo", "  MISSING  " + group + "  (need any one of these)"]
+        step ["echo", "  XX  " + pad(group + "  ", 20) + "required  MISSING - need any one of these"]
       } else {
-        step ["echo", "  MISSING  " + group + "  (required)"]
+        step ["echo", "  XX  " + pad(group + "  ", 20) + "required  MISSING"]
       }
     }
   }
@@ -109,10 +113,10 @@ command doctor(project, config) {
   let absent_optional = []
   for tool in config.optional_tools {
     if project.tool(tool) {
-      step ["echo", "  ok       " + tool + "  (optional)"]
+      step ["echo", "  ok  " + pad(tool + "  ", 20) + "optional"]
     } else {
       absent_optional = absent_optional + [tool]
-      step ["echo", "  --       " + tool + "  (optional, not installed)"]
+      step ["echo", "  --  " + pad(tool + "  ", 20) + "optional  not installed"]
     }
   }
 
@@ -126,13 +130,14 @@ command doctor(project, config) {
   // exits 1, and because the executor stops at the first failing step, putting
   // it last means every line above is printed first. A `kap doctor` that
   // reported problems and still exited 0 would be useless in CI.
+  step ["echo", ""]
   if len(missing) > 0 {
-    step ["echo", "unhealthy: install the tools marked MISSING above"]
+    step ["echo", "  unhealthy  a required tool is missing - install the rows marked MISSING"]
     step ["false"]
   } else if config.strict && len(absent_optional) > 0 {
-    step ["echo", "unhealthy: strict mode, and an optional tool is missing"]
+    step ["echo", "  unhealthy  strict mode, and an optional tool is absent"]
     step ["false"]
   } else {
-    step ["echo", "healthy"]
+    step ["echo", "  healthy    every required tool is present"]
   }
 }

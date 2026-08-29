@@ -478,6 +478,14 @@ returns results sorted so a plugin's step list is stable.
 | `contains` | `(haystack: str, needle: str) -> bool` |
 | `trim` | `(s: str) -> str` |
 | `split` | `(s: str, sep: str) -> list<str>` |
+| `pad` | `(s: str, width: int) -> str` |
+
+`pad` right-pads with spaces to `width`, counting UTF-8 code points rather than
+bytes so a column holding a non-ASCII name still lines up. It never truncates: a
+string already at or past `width` is returned unchanged, so a long entry pushes
+its own row out instead of losing characters. It exists because a plugin that
+prints a table — `doctor` is the one kap ships — otherwise has no way to align
+one.
 
 There are no user-defined functions in v1. That is a real cost — the `node`
 plugin repeats its package-manager `match` in every command — and it is the

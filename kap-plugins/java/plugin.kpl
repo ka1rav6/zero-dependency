@@ -135,7 +135,7 @@ command run(project, config, extra) {
     // Maven has no notion of "the" main class, and exec:java without one fails
     // deep inside the plugin with a message about a missing parameter.
     if config.main_class == "" {
-      fail "set main_class to tell 'kap run' which class to execute: kap run --set main_class=com.example.Main, or [plugins.java] main_class = \"com.example.Main\" in kap.toml"
+      fail "'kap run' needs a main class\nMaven has no notion of \"the\" main class, and exec:java without one fails\ninside the plugin complaining about a missing parameter.\n\n  once     kap run --set main_class=com.example.Main\n  always   kap.toml\n             [plugins.java]\n             main_class = \"com.example.Main\""
     }
     let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
     step [launcher, "exec:java", "-Dexec.mainClass=" + config.main_class] + config.build_args + extra

@@ -45,6 +45,7 @@
 #include "core/paths.hpp"
 #include "core/plugin.hpp"
 #include "core/registry.hpp"
+#include "core/style.hpp"
 #include "core/toml.hpp"
 #include "core/version.hpp"
 
@@ -104,6 +105,9 @@ std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 // moved just to satisfy the compiler's reading order.
 void report_no_plugins_anywhere(const std::filesystem::path& root);
 void print_near_misses(const kap::detect::Resolution& resolution);
+void print_detection_footer(const kap::detect::Resolution&           resolution,
+                            const std::vector<kap::plugin::Located>& plugins,
+                            bool                                     verbose);
 int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args);
 
 // `detect.ecosystem` from <root>/kap.toml (design doc §3.2 step 4): the pin
@@ -180,14 +184,10 @@ int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::str
         // this?" with a confident "doctor" — which is wrong, and would send
         // someone hunting for a missing command instead of a missing plugin.
         if (resolution.primary() == nullptr) {
-            std::cerr << "kap: error: no plugin claims " << resolution.root.string() << "\n";
-            if (resolution.matched()) {
-                std::cerr << "      note: these composable sidecars matched, and their commands "
-                             "are available:";
-                for (const kap::detect::Match& match : resolution.matches)
-                    std::cerr << ' ' << match.name;
-                std::cerr << "\n";
-            }
+            const kap::style::Palette c = kap::style::for_stderr();
+            std::cerr << c.red << c.bold << "error" << c.reset << ": no plugin claims this "
+                      << "directory\n       " << c.dim << resolution.root.string() << c.reset
+                      << "\n";
             // The failure branch of the one command whose entire job is to
             // explain the decision. Without this it restates the summary the
             // caller already printed and answers "why" with nothing.
@@ -195,10 +195,7 @@ int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::str
             if (plugins.empty()) {
                 report_no_plugins_anywhere(root);
             } else {
-                std::cerr << "      note: considered:";
-                for (const kap::plugin::Located& located : plugins)
-                    std::cerr << ' ' << located.name;
-                std::cerr << "\n";
+                print_detection_footer(resolution, plugins, global.verbose);
             }
             return 1;
         }
@@ -400,18 +397,94 @@ void report_no_plugins_anywhere(const std::filesystem::path& root)
 }
 
 // Print near-miss information (plugins that were evaluated but scored 0).
+// The marker text without its directive wrapper: `file_exists "go.mod"` is
+// rendered as `go.mod`, because in a column of markers the directive name is
+// the same word repeated and the filename is the part being compared.
+// `file_contains` keeps both, since the path alone would not explain it.
+std::string marker_label(const std::string& description)
+{
+    const std::size_t open = description.find('"');
+    if (description.rfind("file_contains", 0) == 0 || open == std::string::npos)
+        return description;
+    const std::size_t close = description.find('"', open + 1);
+    if (close == std::string::npos)
+        return description;
+    return description.substr(open + 1, close - open - 1);
+}
+
+// The bottom half of every "nothing claims this" message: what *did* match,
+// how many plugins were weighed, and — the line that actually helps — what to
+// create. Ten plugin names is a wall nobody reads, so the list collapses to a
+// count unless --verbose asks for it.
+void print_detection_footer(const kap::detect::Resolution&           resolution,
+                            const std::vector<kap::plugin::Located>& plugins,
+                            bool                                     verbose)
+{
+    const kap::style::Palette c = kap::style::for_stderr();
+    std::cerr << "\n";
+
+    if (resolution.matched()) {
+        std::string names;
+        for (const kap::detect::Match& match : resolution.matches)
+            names += (names.empty() ? "" : ", ") + match.name;
+        std::cerr << "  " << c.dim << "also available" << c.reset << "   " << names
+                  << std::string(names.size() < 14 ? 16 - names.size() : 2, ' ') << c.dim
+                  << "sidecars \u2014 they claim every directory" << c.reset << "\n";
+    }
+
+    const std::string count = std::to_string(plugins.size()) + " plugins";
+    std::cerr << "  " << c.dim << "considered" << c.reset << "       " << count;
+    if (verbose) {
+        std::cerr << "\n";
+        for (const kap::plugin::Located& located : plugins)
+            std::cerr << "                   " << c.dim << located.name << c.reset << "\n";
+    } else {
+        std::cerr << std::string(count.size() < 14 ? 16 - count.size() : 2, ' ') << c.dim
+                  << "--verbose to list them" << c.reset << "\n";
+    }
+
+    // State the rule rather than naming a winner. The near-miss list is ranked
+    // by *priority* — which plugin would win a contest, not which one is a
+    // plausible fit — so picking the top entry would confidently advise
+    // creating a go.mod in a directory full of Python. The reader knows what
+    // language they are writing; they only need to know what kap looks for.
+    if (!resolution.near_misses.empty()) {
+        std::cerr << "\n  " << c.green << "help" << c.reset
+                  << ": each marked file above is one kap looks for. Creating the one that\n"
+                  << "        fits this project lets that plugin claim it.\n";
+    }
+}
+
+// The near-miss block, as a table.
+//
+// The list form this replaced repeated `note:` on every line and put each
+// marker on its own row, so a reader comparing three plugins had to scan down
+// a column that was mostly the word "note". Markers are short and there are
+// rarely more than three, so they fit on one line per plugin and the names
+// align — which is what makes "none of these files exist" legible at a glance.
 void print_near_misses(const kap::detect::Resolution& resolution)
 {
     if (resolution.near_misses.empty())
         return;
+    const kap::style::Palette c = kap::style::for_stderr();
 
-    std::cerr << "      note: evaluated these plugins but none matched:\n";
+    std::size_t width = 0;
+    for (const kap::detect::NearMiss& miss : resolution.near_misses)
+        width = std::max(width, miss.name.size());
+
+    std::cerr << "\n  " << c.bold << "closest matches, none fired" << c.reset << "\n";
     for (const kap::detect::NearMiss& miss : resolution.near_misses) {
-        std::cerr << "      note: " << miss.name << " (priority " << miss.priority << ")\n";
-        for (const kap::detect::MarkerResult& marker : miss.markers) {
-            const std::string status = marker.fired ? "✓" : "✗";
-            std::cerr << "      note:   " << status << " " << marker.description << "\n";
+        std::cerr << "    " << c.cyan << miss.name << c.reset
+                  << std::string(width - miss.name.size() + 2, ' ');
+        for (std::size_t i = 0; i < miss.markers.size(); ++i) {
+            const kap::detect::MarkerResult& marker = miss.markers[i];
+            const char* mark = marker.fired ? kap::style::mark_yes() : kap::style::mark_no();
+            const char* tint = marker.fired ? c.green : c.red;
+            if (i > 0)
+                std::cerr << "   ";
+            std::cerr << tint << mark << c.reset << ' ' << marker_label(marker.description);
         }
+        std::cerr << "\n";
     }
 }
 
@@ -421,17 +494,16 @@ void print_near_misses(const kap::detect::Resolution& resolution)
 // warning that might be the actual cause.
 int report_no_match(const Session& session)
 {
-    std::cerr << "kap: error: no plugin claims " << session.resolution.root.string() << "\n";
+    const kap::style::Palette c = kap::style::for_stderr();
+    std::cerr << c.red << c.bold << "error" << c.reset << ": no plugin claims this directory\n"
+              << "       " << c.dim << session.resolution.root.string() << c.reset << "\n";
     for (const std::string& warning : session.resolution.warnings)
-        std::cerr << "      note: " << warning << "\n";
+        std::cerr << "  " << c.yellow << "warning" << c.reset << ": " << warning << "\n";
     print_near_misses(session.resolution);
     if (session.plugins.empty()) {
         report_no_plugins_anywhere(session.search_root);
     } else {
-        std::cerr << "      note: considered:";
-        for (const kap::plugin::Located& located : session.plugins)
-            std::cerr << ' ' << located.name;
-        std::cerr << "\n      note: run 'kap detect' to see why none of them matched\n";
+        print_detection_footer(session.resolution, session.plugins, false);
     }
     return 1;
 }
@@ -728,16 +800,11 @@ int dispatch_one(const Session&                                session,
             // claim every directory. Saying "no plugin defines build" without
             // saying that nothing *owns* this directory would send the user
             // looking for a missing command rather than a missing plugin.
-            std::cerr << "      note: no plugin claims " << session.resolution.root.string()
-                      << "\n      note: only these composable sidecars matched:";
-            for (const kap::detect::Match& match : session.resolution.matches)
-                std::cerr << ' ' << match.name;
-            std::cerr << "\n";
+            const kap::style::Palette c = kap::style::for_stderr();
+            std::cerr << "       no plugin claims this directory\n       " << c.dim
+                      << session.resolution.root.string() << c.reset << "\n";
             print_near_misses(session.resolution);
-            std::cerr << "      note: considered:";
-            for (const kap::plugin::Located& located : session.plugins)
-                std::cerr << ' ' << located.name;
-            std::cerr << "\n      note: run 'kap detect' to see why\n";
+            print_detection_footer(session.resolution, session.plugins, global.verbose);
         }
         if (available.empty()) {
             std::cerr << "      note: it defines no commands at all\n";
@@ -756,6 +823,8 @@ int dispatch_one(const Session&                                session,
         return 1;
 
     kap::exec::Options options = executor_options(global, session.resolution.root);
+    options.command_name       = command;
+    options.plugin_name        = loaded->match != nullptr ? loaded->match->name : std::string{};
     options.open_first_url     = open_first_url;
 
     if (const int hook_status = run_hook_phase(session, "pre", command, options); hook_status != 0)
