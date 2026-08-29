@@ -1,0 +1,124 @@
+// go — build, test, vet, and format Go modules.
+//
+// Go's toolchain is unusually uniform: one binary, one set of subcommands, no
+// package-manager choice to make. That makes this the shortest ecosystem
+// plugin here, and a good one to read first.
+
+manifest {
+  name        = "go"
+  version     = "1.0.0"
+  api_version = 1
+  priority    = 45
+  composable  = false
+  supersedes  = []
+}
+
+detect {
+  file_exists "go.mod"
+  // A pre-modules project, or a vendored tree with no go.mod at the root.
+  file_exists "go.work"
+}
+
+requires {
+  any_of   [go]
+  // Quoted because a bare word in a directive list must be an identifier,
+  // and `golangci-lint` contains a dash.
+  optional [gofumpt, "golangci-lint", staticcheck]
+}
+
+schema {
+  // What to build and test. "./..." is Go's own "everything in this module".
+  packages: str = "./..."
+
+  // Where `go build` writes its binary. Empty means "let go decide", which
+  // puts it next to the package — usually what you want for a single main.
+  output: str = ""
+
+  // Build tags, passed as `-tags a,b`. Empty means none.
+  tags: str = ""
+
+  // `go test -race` catches the bugs that are hardest to find any other way,
+  // so it is on by default. Turn it off for a build without cgo.
+  race: bool = true
+
+  // Extra flags added to every `go build`.
+  build_flags: list<str> = []
+
+  // `kap fmt --set check=true` lists misformatted files instead of rewriting
+  // them, which is what `kap ci` wants.
+  check: bool = false
+
+  // Prefer golangci-lint when it is installed; fall back to `go vet`, which
+  // ships with the toolchain and is therefore always available.
+  linter: enum { auto, vet, golangci } = auto
+}
+
+command build(project, config, extra) {
+  let cmd = ["go", "build"]
+  if config.tags != "" { cmd = cmd + ["-tags", config.tags] }
+  if config.output != "" { cmd = cmd + ["-o", config.output] }
+  cmd = cmd + config.build_flags
+  step cmd + [config.packages] + extra
+}
+
+command test(project, config, extra) {
+  let cmd = ["go", "test"]
+  if config.race { cmd = cmd + ["-race"] }
+  if config.tags != "" { cmd = cmd + ["-tags", config.tags] }
+  step cmd + [config.packages] + extra
+}
+
+command check(project, config, extra) {
+  // `go vet` is the closest thing Go has to a typecheck-only pass: it
+  // compiles without linking and reports suspicious constructs.
+  step ["go", "vet", config.packages] + extra
+}
+
+command lint(project, config, extra) {
+  let tool = match config.linter {
+    auto     => if project.tool("golangci-lint") then "golangci" else "vet",
+    vet      => "vet",
+    golangci => "golangci",
+  }
+  if tool == "golangci" {
+    step ["golangci-lint", "run"] + extra
+  } else {
+    step ["go", "vet", config.packages] + extra
+  }
+}
+
+command fmt(project, config, extra) {
+  // `-l` lists the files that are not formatted; `-w` rewrites them in place.
+  // Check mode drops `-w`, so `kap fmt --set check=true` reports without
+  // changing anything.
+  //
+  // One honest caveat: gofmt exits 0 even when `-l` printed names, so a CI job
+  // that only checks the exit code will not notice. The `ci` command below is
+  // written the way Go projects actually do it — see docs/usage.md.
+  let flags = if config.check then ["-l"] else ["-l", "-w"]
+  step ["gofmt"] + flags + ["."] + extra
+}
+
+command run(project, config, extra) {
+  step ["go", "run", config.packages] + extra
+}
+
+command install(project, config, extra) {
+  step ["go", "install", config.packages] + extra
+}
+
+command clean(project, config) {
+  // -cache and -testcache clear the shared build caches, which is what people
+  // actually mean by "clean" in Go — the module directory itself holds almost
+  // no build output.
+  step ["go", "clean", "-cache", "-testcache", config.packages]
+  report_freed_space
+}
+
+command ci(project, config) {
+  step ["gofmt", "-l", "."]
+  step ["go", "vet", config.packages]
+  let cmd = ["go", "test"]
+  if config.race { cmd = cmd + ["-race"] }
+  step cmd + [config.packages]
+}

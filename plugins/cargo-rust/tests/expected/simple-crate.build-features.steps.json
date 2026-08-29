@@ -1,0 +1,7 @@
+{
+  "command": "build",
+  "config": { "release": true, "features": "serde,tokio" },
+  "steps": [
+    { "cmd": ["cargo", "build", "--release", "--features", "serde,tokio"] }
+  ]
+}

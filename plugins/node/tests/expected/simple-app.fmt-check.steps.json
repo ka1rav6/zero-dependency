@@ -1,0 +1,7 @@
+{
+  "command": "fmt",
+  "config": { "check": true },
+  "steps": [
+    { "cmd": ["npm", "run", "format", "--", "--check"] }
+  ]
+}

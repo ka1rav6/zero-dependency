@@ -1,0 +1,6 @@
+{
+  "config": { "package_manager": "yarn" },
+  "steps": [
+    { "cmd": ["yarn", "run", "build"] }
+  ]
+}

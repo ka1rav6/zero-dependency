@@ -751,8 +751,12 @@ kap plugin install cmake-cpp
 ### 6.6 Bundled plugins
 
 `kap` ships a minimal set of plugins in its data directory — `doctor`,
-`ports`, `generic-makefile` — written in KPL, not C++. This dogfoods the
+`ports`, `make-generic` — written in KPL, not C++. This dogfoods the
 same DSL external authors use.
+
+(Milestone 8's list spells the Makefile plugin `make-generic` and this section
+originally spelled it `generic-makefile`. `make-generic` is the name that
+ships.)
 
 ---
 
@@ -1267,26 +1271,60 @@ would be backwards.
 
 ---
 
-### Milestone 8 — First-party plugins (core ecosystems) ⬅ **next**
+### Milestone 8 — First-party plugins (core ecosystems)
 **Goal:** Parity with the most common `uu` ecosystems.
 
 Priority order:
-1. `cmake-cpp`
-2. `make-generic`
-3. `cargo-rust`
-4. `node` (workspace-aware `dev`)
-5. `go`
-6. `python-uv`
+1. [x] `cmake-cpp`
+2. [x] `make-generic`
+3. [x] `cargo-rust`
+4. [x] `node` (workspace-aware `dev`)
+5. [x] `go`
+6. [x] `python-uv`
 
 Each plugin ships `plugin.kpl` + fixture tests. No plugin merges without
 `kap plugin test` passing.
 
 **Exit criteria:** `kap plugin install --bundle core` enables build/test in
-six fixture project types.
+six fixture project types. ✅ — 42 fixture cases across the six, all green
+without cmake, cargo, npm, go, or uv installed on the machine running them.
+
+**Notes.**
+
+*Detection priorities are all distinct*, so no pair of bundled plugins can ever
+reach §3.2's tie error: `make-generic` 10, `cmake-cpp` 30, `node` 35,
+`python-uv` 38, `cargo-rust` 40, `go` 45. `make-generic` sits below everything
+on purpose — a Rust crate with a convenience Makefile should still be driven by
+cargo.
+
+*Two language problems were found by writing these plugins*, which is the
+argument for writing real ones rather than more synthetic fixtures:
+
+  * **`else if` never parsed.** The statement parser consumed the `if` with
+    `match_text` and then recursed into `statement()`, which arrived with the
+    keyword already eaten — so the condition parsed as an expression statement
+    and the block's `{` was read as a record literal. The error surfaced as
+    "expected ':' after record field" pointing at the first line of the else
+    body. Fixed, with three regression tests.
+
+  * **An enum member named `none` cannot be matched on.** §5.5's `pattern` rule
+    lists `none` as a literal, so `none => ...` reads as the absent-value
+    literal rather than as the member, and the exhaustiveness checker then
+    reports the member as uncovered. Rather than change the grammar, the schema
+    checker now refuses such a declaration and suggests a rename — caught even
+    when the plugin has no `match` over the field yet, so it cannot lie in wait
+    for whoever adds one. (`python-uv` calls its member `off`.)
+
+*Where a plugin cannot know, it asks rather than guesses.* `cmake-cpp`'s `run`
+needs a `run_target` because CMake has no notion of "the" binary; its `fmt` and
+`lint` do nothing until `format_glob` is set, because a CMake tree routinely
+contains vendored sources that must not be reformatted. `node` picks its
+package manager from the lockfile, which is the only signal that describes the
+repository rather than the machine.
 
 ---
 
-### Milestone 9 — Bundled system plugins
+### Milestone 9 — Bundled system plugins ⬅ **next**
 **Goal:** `doctor` and `ports` in KPL.
 
 - [ ] `doctor` — checks `[requires]` from all matched plugins

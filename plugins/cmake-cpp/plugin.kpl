@@ -33,6 +33,21 @@ schema {
   build_dir:  str       = "build"
   build_type: str       = "Debug"
   cmake_args: list<str> = []
+
+  // `kap run` needs to know which target to execute; CMake has no notion of
+  // "the" binary. Empty means `kap run` says so instead of guessing.
+  run_target: str = ""
+
+  // What `kap install` passes as the prefix. Empty leaves CMake's default.
+  install_prefix: str = ""
+
+  // clang-format is not part of CMake, so formatting is opt-in: set the glob
+  // your sources match. Empty means `kap fmt` reports that it has nothing
+  // configured rather than reformatting a tree at random.
+  format_glob: str = ""
+
+  // `kap fmt --set check=true` verifies instead of rewriting, for CI.
+  check: bool = false
 }
 
 command build(project, config, extra) {
@@ -67,6 +82,62 @@ command build(project, config, extra) {
 
 command test(project, config, extra) {
   step ["ctest", "--test-dir", config.build_dir, "--output-on-failure"] + extra
+}
+
+// `kap check` — configure only. It is the cheapest thing that catches a broken
+// CMakeLists.txt, an unfindable dependency, or a missing toolchain, which is
+// exactly what a typecheck-only pass is for in a language that has no such
+// thing at the build-system level.
+command check(project, config, extra) {
+  let dir = config.build_dir
+  step mkdir "-p" dir
+
+  let configure = ["cmake", "-S", ".", "-B", dir]
+  let generator = match config.generator {
+    auto           => if project.tool("ninja") then "Ninja" else none,
+    ninja          => "Ninja",
+    make           => "Unix Makefiles",
+    unix_makefiles => "Unix Makefiles",
+  }
+  if generator != none {
+    configure = configure + ["-G", generator]
+  }
+  configure = configure + ["-DCMAKE_BUILD_TYPE=" + config.build_type]
+  configure = configure + config.cmake_args
+  step configure + extra
+}
+
+command run(project, config, extra) {
+  // CMake cannot tell kap which binary you meant, so this is configuration
+  // rather than a guess:
+  //     kap run --set run_target=demo
+  //     # or, permanently, in kap.toml:
+  //     #   [plugins.cmake-cpp]
+  //     #   run_target = "demo"
+  step [config.build_dir + "/" + config.run_target] + extra
+}
+
+command install(project, config, extra) {
+  let cmd = ["cmake", "--install", config.build_dir]
+  if config.install_prefix != "" { cmd = cmd + ["--prefix", config.install_prefix] }
+  step cmd + extra
+}
+
+command fmt(project, config, extra) {
+  // Opt-in, because there is no way to know which files are yours: a CMake
+  // project's tree routinely contains vendored sources and generated output,
+  // and reformatting those would be worse than doing nothing.
+  let flags = if config.check then ["--dry-run", "--Werror"] else ["-i"]
+  for file in project.glob(config.format_glob) {
+    step ["clang-format"] + flags + [file] + extra
+  }
+}
+
+command lint(project, config, extra) {
+  // clang-tidy reads the compilation database CMake writes when
+  // CMAKE_EXPORT_COMPILE_COMMANDS is on, which is why this points at the build
+  // directory rather than at source files.
+  step ["clang-tidy", "-p", config.build_dir] + project.glob(config.format_glob) + extra
 }
 
 command clean(project, config) {

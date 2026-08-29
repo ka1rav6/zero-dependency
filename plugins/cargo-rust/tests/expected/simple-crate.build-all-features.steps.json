@@ -1,0 +1,7 @@
+{
+  "command": "build",
+  "config": { "features": "ignored-when-all-features-is-set", "all_features": true },
+  "steps": [
+    { "cmd": ["cargo", "build", "--all-features"] }
+  ]
+}

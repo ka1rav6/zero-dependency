@@ -1,0 +1,7 @@
+{
+  "steps": [
+    { "cmd": ["pnpm", "run", "dev"], "cwd": "packages/api", "label": "packages/api" },
+    { "cmd": ["pnpm", "run", "dev"], "cwd": "packages/web", "label": "packages/web" }
+  ],
+  "concurrent": true
+}

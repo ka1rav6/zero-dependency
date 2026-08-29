@@ -1,0 +1,7 @@
+{
+  "command": "test",
+  "config": { "test_runner": "unittest" },
+  "steps": [
+    { "cmd": ["uv", "run", "python", "-m", "unittest", "discover"] }
+  ]
+}

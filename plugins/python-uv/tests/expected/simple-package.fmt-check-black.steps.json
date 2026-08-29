@@ -1,0 +1,7 @@
+{
+  "command": "fmt",
+  "config": { "check": true, "formatter": "black", "paths": ["src", "tests"] },
+  "steps": [
+    { "cmd": ["uv", "run", "black", "--check", "src", "tests"] }
+  ]
+}

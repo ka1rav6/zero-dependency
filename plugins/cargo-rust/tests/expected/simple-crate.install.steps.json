@@ -1,0 +1,5 @@
+{
+  "steps": [
+    { "cmd": ["cargo", "install", "--path", "."] }
+  ]
+}

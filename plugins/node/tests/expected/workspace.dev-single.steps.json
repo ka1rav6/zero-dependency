@@ -1,0 +1,8 @@
+{
+  "fixture": "workspace",
+  "command": "dev",
+  "config": { "dev_all_workspaces": false },
+  "steps": [
+    { "cmd": ["pnpm", "run", "dev"] }
+  ]
+}

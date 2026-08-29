@@ -1,0 +1,8 @@
+{
+  "command": "build",
+  "config": { "output": "bin/demo", "tags": "netgo,osusergo", "build_flags": ["-trimpath"] },
+  "extra": ["-v"],
+  "steps": [
+    { "cmd": ["go", "build", "-tags", "netgo,osusergo", "-o", "bin/demo", "-trimpath", "./...", "-v"] }
+  ]
+}

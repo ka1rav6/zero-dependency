@@ -1,0 +1,6 @@
+{
+  "config": { "install_prefix": "/usr/local" },
+  "steps": [
+    { "cmd": ["cmake", "--install", "build", "--prefix", "/usr/local"] }
+  ]
+}

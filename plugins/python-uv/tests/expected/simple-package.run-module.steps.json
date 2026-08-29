@@ -1,0 +1,8 @@
+{
+  "command": "run",
+  "config": { "module": "demo" },
+  "extra": ["--verbose"],
+  "steps": [
+    { "cmd": ["uv", "run", "python", "-m", "demo", "--verbose"] }
+  ]
+}

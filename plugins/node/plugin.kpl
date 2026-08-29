@@ -1,0 +1,192 @@
+// node — npm, pnpm, yarn, and bun projects, with workspace-aware `dev`.
+//
+// The interesting part is `dev` (design doc §5.11): a monorepo's dev loop is
+// several servers running at once, so the plugin emits one step per workspace
+// and asks the executor to run them concurrently with labelled output.
+
+manifest {
+  name        = "node"
+  version     = "1.0.0"
+  api_version = 1
+  priority    = 35
+  composable  = false
+  supersedes  = []
+}
+
+detect {
+  file_exists "package.json"
+}
+
+requires {
+  any_of   [npm, pnpm, yarn, bun]
+  optional [node]
+}
+
+schema {
+  // `auto` reads the lockfile, which is the only honest way to know: a repo
+  // with a pnpm-lock.yaml is a pnpm repo whatever else is installed.
+  package_manager: enum { auto, npm, pnpm, yarn, bun } = auto
+
+  // The npm script each kap command runs. Projects name these differently and
+  // there is no standard, so every one is overridable.
+  build_script: str = "build"
+  test_script:  str = "test"
+  lint_script:  str = "lint"
+  fmt_script:   str = "format"
+  dev_script:   str = "dev"
+  start_script: str = "start"
+  check_script: str = "typecheck"
+
+  // Where `dev` looks for workspaces. Only used when the root package.json
+  // declares "workspaces" and dev_all_workspaces is on.
+  workspace_glob:      str  = "packages/*"
+  dev_all_workspaces:  bool = true
+
+  // `kap fmt --set check=true` verifies formatting instead of rewriting it,
+  // which is what `kap ci` wants. See the `fmt` command below.
+  check: bool = false
+
+  // Directories `kap clean` removes. node_modules is deliberately NOT in the
+  // default: deleting it turns a five-second clean into a five-minute
+  // reinstall, and a user who wants that can ask for it by name.
+  clean_paths: list<str> = ["dist", "build", ".next", ".turbo", "coverage"]
+}
+
+command build(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "run", config.build_script] + extra
+}
+
+command test(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "run", config.test_script] + extra
+}
+
+command lint(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "run", config.lint_script] + extra
+}
+
+command check(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "run", config.check_script] + extra
+}
+
+command fmt(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  // `--` separates the package manager's own arguments from the script's, so
+  // `--check` reaches prettier rather than npm.
+  let args = if config.check then ["--", "--check"] else []
+  step [pm, "run", config.fmt_script] + args + extra
+}
+
+command install(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "install"] + extra
+}
+
+command run(project, config, extra) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  step [pm, "run", config.start_script] + extra
+}
+
+// The workspace-aware dev loop from design doc §5.11.
+command dev(project, config) {
+  let pm = match config.package_manager {
+    auto => if project.exists("pnpm-lock.yaml") then "pnpm"
+            else if project.exists("yarn.lock") then "yarn"
+            else if project.exists("bun.lockb") then "bun"
+            else "npm",
+    npm  => "npm",
+    pnpm => "pnpm",
+    yarn => "yarn",
+    bun  => "bun",
+  }
+  let manifest_text = project.read("package.json")
+
+  if contains(manifest_text, "\"workspaces\"") && config.dev_all_workspaces {
+    // One step per workspace, run at once with the workspace name as the
+    // output prefix. `concurrent` is declared before the steps so that reading
+    // the block top to bottom tells you how it will behave.
+    concurrent true
+    for ws in project.glob(config.workspace_glob) {
+      if project.exists(ws + "/package.json") {
+        step { cmd: [pm, "run", config.dev_script], cwd: ws, label: ws }
+      }
+    }
+  } else {
+    step [pm, "run", config.dev_script]
+  }
+}
+
+command clean(project, config) {
+  // `rm -rf` on a list that may be empty would be `rm -rf` with no operands,
+  // which GNU rm refuses — so the paths are appended and the default list is
+  // never empty. A user who empties it gets a plugin that does nothing, which
+  // is the honest reading of "clean nothing".
+  step ["rm", "-rf"] + config.clean_paths
+  report_freed_space
+}

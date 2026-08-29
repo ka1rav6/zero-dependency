@@ -231,6 +231,21 @@ expect_stdout_contains "plugin test reports the cmake-cpp build case" \
 expect_stdout_contains "plugin test reports the cargo-rust build case" \
     "cargo-rust simple-crate.build" plugin test --root "$repo_root"
 
+# Milestone 8: all six first-party ecosystems ship with passing fixture cases,
+# and none of them needs its ecosystem toolchain to be installed.
+for plugin_name in cmake-cpp cargo-rust make-generic node go python-uv; do
+    expect_status "plugin test passes for $plugin_name" 0 \
+        plugin test "$plugin_name" --root "$repo_root"
+    expect_status "plugin doctor passes for $plugin_name" 0 \
+        plugin doctor "$plugin_name" --root "$repo_root"
+done
+
+# The node plugin's workspace `dev` is the only bundled case that produces a
+# concurrent spec with per-step cwd and label, so it is worth asserting through
+# the binary and not only through the golden file.
+expect_stdout_contains "the node workspace dev case is exercised" \
+    "node workspace.dev" plugin test node --root "$repo_root"
+
 expect_status "plugin test accepts a single plugin name" 0 \
     plugin test cargo-rust --root "$repo_root"
 expect_empty_stdout "plugin test rejects an unknown plugin name" \

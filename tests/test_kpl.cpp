@@ -1003,3 +1003,152 @@ KAP_TEST("KPL index errors point at the subscript")
         KAP_ASSERT_EQ(error.diagnostic().location.line, 3);
     }
 });
+
+// --- `else if` (Milestone 8 regression) ---------------------------------------------
+//
+// `else if` never parsed. The statement parser consumed the `if` with
+// match_text and then called statement(), which arrived with the keyword
+// already eaten — so the condition parsed as an expression statement and the
+// block's `{` was read as a record literal. The reported error was "expected
+// ':' after record field", pointing at the first line of the else body, which
+// is about as far from the real cause as a parser error can get.
+//
+// It was found by writing a plugin that needed it, not by these tests, which
+// is why they exist now.
+
+KAP_TEST("else if parses and takes the second branch")
+{
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "chain" version = "1.0.0" api_version = 1 }
+schema { a: bool = false  b: bool = false }
+command build(project, config, extra) {
+  if config.a {
+    step ["echo", "first"]
+  } else if config.b {
+    step ["echo", "second"]
+  } else {
+    step ["echo", "third"]
+  }
+}
+)");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+
+    kap::kpl::Project project;
+    project.root = "/tmp";
+
+    const auto run = [&](bool a, bool b) {
+        std::map<std::string, kap::kpl::Value> config;
+        config["a"] = kap::kpl::Value::boolean_value(a);
+        config["b"] = kap::kpl::Value::boolean_value(b);
+        return kap::kpl::evaluate(plugin, "build", project, config, {});
+    };
+
+    KAP_ASSERT_EQ(run(true, false).steps.front().command.back(), std::string("first"));
+    KAP_ASSERT_EQ(run(false, true).steps.front().command.back(), std::string("second"));
+    KAP_ASSERT_EQ(run(false, false).steps.front().command.back(), std::string("third"));
+    // Both true: the first arm wins, as in every language with this shape.
+    KAP_ASSERT_EQ(run(true, true).steps.front().command.back(), std::string("first"));
+});
+
+KAP_TEST("else if chains to any depth")
+{
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "deep" version = "1.0.0" api_version = 1 }
+schema { n: int = 0 }
+command build(project, config, extra) {
+  if config.n == 1 {
+    step ["echo", "one"]
+  } else if config.n == 2 {
+    step ["echo", "two"]
+  } else if config.n == 3 {
+    step ["echo", "three"]
+  } else if config.n == 4 {
+    step ["echo", "four"]
+  } else {
+    step ["echo", "many"]
+  }
+}
+)");
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+
+    kap::kpl::Project project;
+    project.root   = "/tmp";
+    const auto run = [&](std::int64_t n) {
+        std::map<std::string, kap::kpl::Value> config;
+        config["n"] = kap::kpl::Value::integer_value(n);
+        return kap::kpl::evaluate(plugin, "build", project, config, {})
+            .steps.front()
+            .command.back();
+    };
+
+    KAP_ASSERT_EQ(run(1), std::string("one"));
+    KAP_ASSERT_EQ(run(3), std::string("three"));
+    KAP_ASSERT_EQ(run(4), std::string("four"));
+    KAP_ASSERT_EQ(run(9), std::string("many"));
+});
+
+KAP_TEST("an else-if with no trailing else simply falls through")
+{
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "nofallback" version = "1.0.0" api_version = 1 }
+schema { a: bool = false  b: bool = false }
+command build(project, config, extra) {
+  step ["always"]
+  if config.a {
+    step ["echo", "first"]
+  } else if config.b {
+    step ["echo", "second"]
+  }
+}
+)");
+    kap::kpl::Project      project;
+    project.root = "/tmp";
+    std::map<std::string, kap::kpl::Value> config;
+    config["a"] = kap::kpl::Value::boolean_value(false);
+    config["b"] = kap::kpl::Value::boolean_value(false);
+
+    const kap::kpl::CommandSpec spec = kap::kpl::evaluate(plugin, "build", project, config, {});
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(spec.steps.front().command.front(), std::string("always"));
+});
+
+// --- an enum member named `none` (Milestone 8) ----------------------------------------
+
+KAP_TEST("a schema enum may not declare a member named none")
+{
+    // §5.5's `pattern` rule lists `none` as a literal, so `none => ...` in a
+    // match arm reads as the absent-value literal rather than as the member.
+    // The exhaustiveness checker then reports the member as uncovered, which is
+    // true but reads like a bug in the checker. Refusing the declaration up
+    // front is much kinder — and it is caught even when the plugin has no
+    // match over the field yet, so it cannot lie in wait for whoever adds one.
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "nonenum" version = "1.0.0" api_version = 1 }
+schema { checker: enum { none, mypy } = none }
+command build(project, config, extra) { step ["echo"] }
+)");
+    const auto [values, errors]   = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT(!errors.empty());
+    bool mentioned = false;
+    for (const std::string& error : errors)
+        mentioned = mentioned || error.find("cannot be matched") != std::string::npos;
+    KAP_ASSERT(mentioned);
+});
+
+KAP_TEST("an enum whose members avoid none is accepted")
+{
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "okenum" version = "1.0.0" api_version = 1 }
+schema { checker: enum { off, mypy } = off }
+command build(project, config, extra) {
+  let tool = match config.checker {
+    off  => "ruff",
+    mypy => "mypy",
+  }
+  step ["uv", "run", tool]
+}
+)");
+    const auto [values, errors]   = kap::kpl::build_config(plugin, {});
+    KAP_ASSERT(errors.empty());
+    KAP_ASSERT(kap::kpl::type_check(plugin).empty());
+});

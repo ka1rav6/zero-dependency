@@ -1,0 +1,6 @@
+{
+  "steps": [
+    { "cmd": ["rm", "-rf", "dist", "build", ".next", ".turbo", "coverage"] }
+  ],
+  "report_freed_space": true
+}

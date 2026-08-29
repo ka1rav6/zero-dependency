@@ -24,12 +24,27 @@ requires {
 schema {
   release: bool = false
   check:   bool = false
+
+  // Passed as `--features a,b`. Empty means "cargo's defaults".
+  features: str = ""
+
+  // `--all-features` overrides `features` when set, matching cargo's own rule.
+  all_features: bool = false
+
+  // What `kap run` runs, for a workspace with several binaries. Empty lets
+  // cargo pick, which works for a single-binary crate.
+  bin: str = ""
 }
 
 command build(project, config, extra) {
   // `release` is a plain bool rather than an enum because there are exactly
   // two states and `--release` is the only flag either one produces.
   let flags = if config.release then ["--release"] else []
+  if config.all_features {
+    flags = flags + ["--all-features"]
+  } else if config.features != "" {
+    flags = flags + ["--features", config.features]
+  }
   step ["cargo", "build"] + flags + extra
 }
 
@@ -43,7 +58,30 @@ command check(project, config, extra) {
 
 command run(project, config, extra) {
   let flags = if config.release then ["--release"] else []
+  if config.bin != "" { flags = flags + ["--bin", config.bin] }
   step ["cargo", "run"] + flags + extra
+}
+
+command install(project, config, extra) {
+  // `--path .` installs *this* crate rather than fetching one from crates.io,
+  // which is what `kap install` means in a project directory.
+  step ["cargo", "install", "--path", "."] + extra
+}
+
+command dev(project, config, extra) {
+  // cargo-watch is not part of cargo, so this is a plain step that fails
+  // loudly if it is not installed — the executor reports "cannot run
+  // cargo-watch", which is a better answer than kap silently doing nothing.
+  step ["cargo", "watch", "-x", "run"] + extra
+}
+
+// `kap ci` — declared explicitly rather than left to kap's fmt+lint+test
+// fallback, because the order and the `--check` matter and a Rust CI job is a
+// well-known three-step recipe.
+command ci(project, config) {
+  step ["cargo", "fmt", "--", "--check"]
+  step ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]
+  step ["cargo", "test"]
 }
 
 command lint(project, config) {

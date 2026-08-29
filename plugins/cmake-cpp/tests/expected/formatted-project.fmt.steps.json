@@ -1,0 +1,8 @@
+{
+  "command": "fmt",
+  "config": { "format_glob": "*.?pp" },
+  "steps": [
+    { "cmd": ["clang-format", "-i", "main.cpp"] },
+    { "cmd": ["clang-format", "-i", "util.hpp"] }
+  ]
+}

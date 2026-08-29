@@ -1,0 +1,9 @@
+{
+  "fixture": "formatted-project",
+  "command": "fmt",
+  "config": { "format_glob": "*.?pp", "check": true },
+  "steps": [
+    { "cmd": ["clang-format", "--dry-run", "--Werror", "main.cpp"] },
+    { "cmd": ["clang-format", "--dry-run", "--Werror", "util.hpp"] }
+  ]
+}

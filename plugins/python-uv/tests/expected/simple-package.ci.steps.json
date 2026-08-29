@@ -1,0 +1,7 @@
+{
+  "steps": [
+    { "cmd": ["uv", "run", "ruff", "format", "--check", "."] },
+    { "cmd": ["uv", "run", "ruff", "check", "."] },
+    { "cmd": ["uv", "run", "pytest"] }
+  ]
+}

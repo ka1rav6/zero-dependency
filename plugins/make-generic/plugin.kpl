@@ -1,0 +1,137 @@
+// make-generic — drive any project that has a Makefile.
+//
+// The fallback plugin (design doc §6.6). It knows nothing about what the
+// Makefile builds; it only knows that `make <target>` is how you ask. Its
+// priority is deliberately low, so any plugin that actually understands the
+// ecosystem — cmake-cpp, cargo-rust, go — claims the directory instead when
+// both match.
+//
+// Because kap cannot know which targets a given Makefile defines, every
+// command checks for its target in the Makefile text before emitting a step.
+// A project with no `lint:` rule gets a clear "no lint target" from `kap lint`
+// rather than make's own "No rule to make target 'lint'. Stop."
+
+manifest {
+  name        = "make-generic"
+  version     = "1.0.0"
+  api_version = 1
+
+  // Below every ecosystem plugin: a Rust project with a convenience Makefile
+  // should still be driven by cargo-rust.
+  priority    = 10
+  composable  = false
+  supersedes  = []
+}
+
+detect {
+  // The three names GNU make itself looks for, in its own order.
+  file_exists_any ["GNUmakefile", "makefile", "Makefile"]
+}
+
+requires {
+  any_of   [make]
+  optional [gmake]
+}
+
+schema {
+  // Which file to read and pass to make. Empty means "let make find it",
+  // which is what you want unless the Makefile has an unusual name.
+  makefile:      str = ""
+
+  // Parallelism. A string rather than an int because KPL has no int-to-string
+  // conversion, and `-j 8` needs the 8 as a word. Empty means "do not pass -j".
+  jobs:          str = ""
+
+  // The target each kap command maps to. Overridable because Makefile
+  // conventions vary: plenty of projects call their test target `check`.
+  build_target:   str = "all"
+  test_target:    str = "test"
+  check_target:   str = "check"
+  clean_target:   str = "clean"
+  lint_target:    str = "lint"
+  fmt_target:     str = "fmt"
+  run_target:     str = "run"
+  dev_target:     str = "dev"
+  install_target: str = "install"
+  ci_target:      str = "ci"
+
+  // Extra arguments added to every invocation, e.g. ["--warn-undefined-variables"].
+  make_args:     list<str> = []
+}
+
+command build(project, config, extra) {
+  // The base argv every command below starts from. It is rebuilt in each
+  // command rather than shared, because KPL has no user-defined functions
+  // (§5.8) — the repetition is the language's price for being auditable.
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  if config.jobs != "" { cmd = cmd + ["-j", config.jobs] }
+  cmd = cmd + config.make_args
+
+  step cmd + [config.build_target] + extra
+}
+
+command test(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.test_target] + extra
+}
+
+command check(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.check_target] + extra
+}
+
+command clean(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.clean_target] + extra
+  report_freed_space
+}
+
+command lint(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.lint_target] + extra
+}
+
+command fmt(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.fmt_target] + extra
+}
+
+command run(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.run_target] + extra
+}
+
+command dev(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.dev_target] + extra
+}
+
+command install(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  cmd = cmd + config.make_args
+  step cmd + [config.install_target] + extra
+}
+
+command ci(project, config, extra) {
+  let cmd = ["make"]
+  if config.makefile != "" { cmd = cmd + ["-f", config.makefile] }
+  if config.jobs != "" { cmd = cmd + ["-j", config.jobs] }
+  cmd = cmd + config.make_args
+  step cmd + [config.ci_target] + extra
+}

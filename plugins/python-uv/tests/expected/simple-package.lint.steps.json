@@ -1,0 +1,5 @@
+{
+  "steps": [
+    { "cmd": ["uv", "run", "ruff", "check", "."] }
+  ]
+}

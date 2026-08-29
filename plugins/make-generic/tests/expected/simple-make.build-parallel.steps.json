@@ -1,0 +1,8 @@
+{
+  "command": "build",
+  "config": { "jobs": "8", "makefile": "Makefile.custom", "make_args": ["--warn-undefined-variables"] },
+  "extra": ["V=1"],
+  "steps": [
+    { "cmd": ["make", "-f", "Makefile.custom", "-j", "8", "--warn-undefined-variables", "all", "V=1"] }
+  ]
+}

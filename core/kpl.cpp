@@ -521,9 +521,24 @@ private:
             result.token = tokens_[position_ - 1];
             result.expressions.push_back(expression());
             result.body = block().statements;
-            if (match_text("else"))
-                result.otherwise =
-                    match_text("if") ? std::vector<Statement>{statement()} : block().statements;
+            if (match_text("else")) {
+                // `else if` is parsed by recursing into statement(), which
+                // yields a nested If in the else branch — the standard
+                // desugaring, and the reason the AST needs no `else if` node.
+                //
+                // Note check_text, not match_text. match_text *consumes* the
+                // token; consuming the `if` here and then calling statement()
+                // left statement() looking at the condition with no keyword in
+                // front of it, so `} else if cond {` parsed the condition as an
+                // expression statement and then read the block's `{` as a
+                // record literal. The reported error was "expected ':' after
+                // record field", pointing at the first line of the else body —
+                // about as far from the real cause as a parser error can get.
+                if (check_text("if"))
+                    result.otherwise = std::vector<Statement>{statement()};
+                else
+                    result.otherwise = block().statements;
+            }
             return result;
         }
         if (match_text("for")) {
@@ -1044,6 +1059,25 @@ build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides
         if (!known.emplace(field.name, &field).second) {
             errors.push_back("duplicate schema field '" + field.name + "'");
             continue;
+        }
+
+        // An enum member called `none` cannot be matched on. §5.5's `pattern`
+        // rule lists `none` as a literal, so `none => ...` in a match arm reads
+        // as the absent-value literal rather than as this member — and the
+        // exhaustiveness checker then reports the member as uncovered, which is
+        // true but reads like a bug in the checker.
+        //
+        // Refusing the declaration is much kinder than letting a plugin author
+        // debug that. Caught here rather than in the parser because this is a
+        // property of the *schema*, and a plugin with no match over the field
+        // would otherwise sail through and fail only for whoever adds one.
+        if (field.type == "enum" &&
+            std::find(field.enum_values.begin(), field.enum_values.end(), "none") !=
+                field.enum_values.end()) {
+            errors.push_back("schema field '" + field.name +
+                             "' declares an enum member named 'none', which cannot be matched "
+                             "on because `none` is the absent-value literal; rename it (for "
+                             "example to 'off')");
         }
         if (!field.default_value)
             errors.push_back("schema field '" + field.name + "' requires a default");

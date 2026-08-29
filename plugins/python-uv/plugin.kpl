@@ -1,0 +1,141 @@
+// python-uv — Python projects managed with uv.
+//
+// uv is a single binary that replaces pip, virtualenv, pip-tools, and (with
+// `uv run`) the "which environment am I in" question entirely, so every command
+// here is `uv run <tool>` and no step ever has to activate anything.
+//
+// ## What this plugin claims
+//
+// A `uv.lock` is unambiguous. A bare `pyproject.toml` is not — it might be a
+// poetry, hatch, or pdm project — but uv works with any standard pyproject, so
+// claiming it is more useful than leaving the directory unowned. If you use a
+// different tool, install its plugin (it will out-rank this one) or pin yours:
+//
+//     # kap.toml
+//     [detect]
+//     ecosystem = "python-poetry"
+
+manifest {
+  name        = "python-uv"
+  version     = "1.0.0"
+  api_version = 1
+  priority    = 38
+  composable  = false
+  supersedes  = []
+}
+
+detect {
+  file_exists "uv.lock"
+  file_exists "pyproject.toml"
+}
+
+requires {
+  any_of   [uv]
+  optional [ruff, pytest, mypy]
+}
+
+schema {
+  // What `kap test` runs under. pytest is the near-universal choice; unittest
+  // is here because it needs no dependency at all.
+  test_runner: enum { pytest, unittest } = pytest
+
+  // What `kap lint` and `kap fmt` run. ruff does both and is what uv projects
+  // overwhelmingly use; flake8/black are the older pairing.
+  linter:      enum { ruff, flake8 } = ruff
+  formatter:   enum { ruff, black }  = ruff
+
+  // `kap check` — a type checker is optional in Python, so "not using one" is
+  // a real answer and the default. The member is called `off` rather than
+  // `none` because `none` is KPL's absent-value literal and cannot be matched
+  // on (the schema checker refuses the declaration and says so).
+  type_checker: enum { off, mypy, pyright } = off
+
+  // What `kap run` executes: the module named here, via `python -m`.
+  module: str = ""
+
+  // Paths lint, format, and type-check look at.
+  paths: list<str> = ["."]
+
+  // `kap fmt --set check=true` reports instead of rewriting, for CI.
+  check: bool = false
+
+  // Directories `kap clean` removes. `.venv` is deliberately absent: deleting
+  // it turns a clean into a full reinstall, and a user who wants that can say
+  // so by name.
+  clean_paths: list<str> = ["build", "dist", ".pytest_cache", ".ruff_cache", ".mypy_cache"]
+}
+
+command build(project, config, extra) {
+  // `uv build` produces the sdist and wheel. For a project that is an
+  // application rather than a package, `kap install` (uv sync) is the command
+  // you actually want.
+  step ["uv", "build"] + extra
+}
+
+command test(project, config, extra) {
+  let runner = match config.test_runner {
+    pytest   => ["uv", "run", "pytest"],
+    unittest => ["uv", "run", "python", "-m", "unittest", "discover"],
+  }
+  step runner + extra
+}
+
+command lint(project, config, extra) {
+  let cmd = match config.linter {
+    ruff   => ["uv", "run", "ruff", "check"],
+    flake8 => ["uv", "run", "flake8"],
+  }
+  step cmd + config.paths + extra
+}
+
+command fmt(project, config, extra) {
+  let cmd = match config.formatter {
+    ruff  => if config.check then ["uv", "run", "ruff", "format", "--check"]
+             else ["uv", "run", "ruff", "format"],
+    black => if config.check then ["uv", "run", "black", "--check"]
+             else ["uv", "run", "black"],
+  }
+  step cmd + config.paths + extra
+}
+
+command check(project, config, extra) {
+  let cmd = match config.type_checker {
+    // Nothing configured: `ruff check` is still a real static pass, and it is
+    // already installed in a uv project. Better than doing nothing silently.
+    off     => ["uv", "run", "ruff", "check"],
+    mypy    => ["uv", "run", "mypy"],
+    pyright => ["uv", "run", "pyright"],
+  }
+  step cmd + config.paths + extra
+}
+
+command install(project, config, extra) {
+  // `uv sync` creates or updates .venv from the lockfile — the "get me set up
+  // to work on this" command.
+  step ["uv", "sync"] + extra
+}
+
+command run(project, config, extra) {
+  if config.module != "" {
+    step ["uv", "run", "python", "-m", config.module] + extra
+  } else {
+    // With no module configured, pass everything straight to `uv run`, so
+    // `kap run -- ./scripts/thing.py` works with no configuration at all.
+    step ["uv", "run"] + extra
+  }
+}
+
+command dev(project, config, extra) {
+  step ["uv", "run", "python", "-m", config.module] + extra
+}
+
+command clean(project, config) {
+  step ["rm", "-rf"] + config.clean_paths
+  report_freed_space
+}
+
+command ci(project, config) {
+  step ["uv", "run", "ruff", "format", "--check"] + config.paths
+  step ["uv", "run", "ruff", "check"] + config.paths
+  step ["uv", "run", "pytest"]
+}

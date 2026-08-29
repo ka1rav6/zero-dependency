@@ -1,0 +1,7 @@
+{
+  "command": "test",
+  "config": { "test_target": "check" },
+  "steps": [
+    { "cmd": ["make", "check"] }
+  ]
+}

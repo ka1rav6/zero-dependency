@@ -1,0 +1,6 @@
+{
+  "steps": [
+    { "cmd": ["make", "clean"] }
+  ],
+  "report_freed_space": true
+}

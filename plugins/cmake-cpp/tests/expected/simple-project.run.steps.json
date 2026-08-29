@@ -1,0 +1,7 @@
+{
+  "config": { "run_target": "demo", "build_dir": "out" },
+  "extra": ["--help"],
+  "steps": [
+    { "cmd": ["out/demo", "--help"] }
+  ]
+}

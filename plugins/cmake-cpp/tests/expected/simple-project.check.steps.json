@@ -1,0 +1,7 @@
+{
+  "tools": ["cmake"],
+  "steps": [
+    { "cmd": ["mkdir", "-p", "build"] },
+    { "cmd": ["cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Debug"] }
+  ]
+}

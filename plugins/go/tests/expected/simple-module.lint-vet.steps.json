@@ -1,0 +1,7 @@
+{
+  "command": "lint",
+  "tools": [],
+  "steps": [
+    { "cmd": ["go", "vet", "./..."] }
+  ]
+}

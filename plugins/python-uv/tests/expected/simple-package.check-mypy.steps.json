@@ -1,0 +1,7 @@
+{
+  "command": "check",
+  "config": { "type_checker": "mypy", "paths": ["src"] },
+  "steps": [
+    { "cmd": ["uv", "run", "mypy", "src"] }
+  ]
+}

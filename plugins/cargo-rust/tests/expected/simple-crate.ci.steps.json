@@ -1,0 +1,7 @@
+{
+  "steps": [
+    { "cmd": ["cargo", "fmt", "--", "--check"] },
+    { "cmd": ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"] },
+    { "cmd": ["cargo", "test"] }
+  ]
+}

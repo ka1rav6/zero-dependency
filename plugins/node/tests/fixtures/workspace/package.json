@@ -1,0 +1,6 @@
+{
+  "name": "workspace-root",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": { "dev": "turbo dev" }
+}
