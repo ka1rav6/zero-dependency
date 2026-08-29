@@ -40,6 +40,7 @@ void print_usage(std::ostream& out)
            "\n"
            "commands:\n"
            "  config get <key>     read one key from ./kap.toml (or --root)\n"
+           "  detect               resolve the active project plugin\n"
            "  plugin doctor        validate bundled plugin files\n"
            "  plugin test [name]   run plugin fixture tests\n"
            "\n"
@@ -54,6 +55,37 @@ void print_usage(std::ostream& out)
 }
 
 std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
+
+// `kap detect` — resolve the project's matching plugin and print the chosen
+// plugin name and priority score. This is the Milestone-4 debug hook.
+int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args)
+{
+    if (!args.empty()) {
+        std::cerr << "kap: usage: kap detect\n";
+        return 2;
+    }
+    const std::filesystem::path root = search_root(global);
+    try {
+        const std::vector<kap::plugin::DetectionMatch> matches = kap::plugin::detect(root);
+        if (matches.empty()) {
+            std::cerr << "kap: error: no plugin matched " << root.string() << "\n";
+            return 1;
+        }
+        const kap::plugin::DetectionMatch& match = matches.front();
+        std::cout << match.located.name << " score=" << match.score << "\n";
+        if (!match.matched_files.empty()) {
+            std::cout << "  markers:";
+            for (const std::string& file : match.matched_files)
+                std::cout << ' ' << file;
+            std::cout << "\n";
+        }
+        return 0;
+    }
+    catch (const kap::diag::Error& error) {
+        std::cerr << error.report();
+        return 1;
+    }
+}
 
 // `kap plugin doctor` — parse, manifest-validate, and type-check every bundled
 // plugin (design doc §6.1). This is the gate that keeps a plugin which cannot
@@ -336,6 +368,9 @@ int main(int argc, char** argv)
 
         if (inv.command == "config") {
             return run_config(inv.global, inv.argv);
+        }
+        if (inv.command == "detect") {
+            return run_detect(inv.global, inv.argv);
         }
         if (inv.command == "plugin") {
             return run_plugin(inv.global, inv.argv);
