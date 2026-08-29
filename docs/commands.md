@@ -612,9 +612,39 @@ directory, so a resolution with no primary still means "nothing owns this":
 
 ```console
 $ kap detect
-kap: error: no plugin claims /tmp/scratch
+kap: error: no plugin claims /home/you/code/backend
       note: these composable sidecars matched, and their commands are available: doctor ports
+      note: evaluated these plugins but none matched:
+      note: go (priority 45)
+      note:   ✗ file_exists "go.mod"
+      note:   ✗ file_exists "go.work"
+      note: cargo-rust (priority 40)
+      note:   ✗ file_exists "Cargo.toml"
+      note: python-uv (priority 38)
+      note:   ✗ file_exists "uv.lock"
+      note:   ✗ file_exists "pyproject.toml"
       note: considered: cargo-rust cmake-cpp doctor go make-generic node ports python-uv
+```
+
+That middle block is the **near-miss list**: the plugins kap evaluated, the
+exact markers each one looked for, and whether each fired. It is the difference
+between knowing that detection failed and knowing what to do about it — the
+example above is a Python project, and the `python-uv` lines say plainly that
+adding a `pyproject.toml` (or running `uv init`) is the fix.
+
+Ranked by priority, highest first, and capped at three. Detection considers
+every installed plugin, so the full list is mostly noise; the top few are the
+ones that would plausibly have claimed the directory. The same list appears
+whenever a project command fails for want of an owner, not just under
+`kap detect`:
+
+```console
+$ kap build
+kap: error: no matched plugin defines a 'build' command
+      note: no plugin claims /home/you/code/backend
+      note: only these composable sidecars matched: doctor ports
+      note: evaluated these plugins but none matched:
+      ...
 ```
 
 A tie is refused rather than guessed at, with the fix spelled out:
@@ -630,6 +660,11 @@ kap: error: cannot tell which plugin owns /home/you/code/hybrid
 **`--refresh`** ignores `.kap/cache.json` and rescans. You need it in one case
 the cache cannot see: a marker created deep inside a subdirectory that no
 existing rule already watches. Deleting `.kap/cache.json` is always safe.
+
+The cache key covers the directory listing, every plugin's identity and mtime,
+**and kap's own version** — so installing a plugin, adding a marker file, or
+upgrading kap all invalidate it without you asking. `--refresh` is for the
+residual case above, not routine hygiene.
 
 **Searching upward.** By default kap looks only at the directory you are in. To
 let it walk up the way git finds `.git`:

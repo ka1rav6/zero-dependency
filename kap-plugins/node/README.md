@@ -66,6 +66,31 @@ Under `[plugins.node]`.
 | `dev_script` | string | `dev` | |
 | `start_script` | string | `start` | What `kap run` runs |
 | `check_script` | string | `typecheck` | |
+
+### Missing scripts
+
+Every command in the table above reads `package.json` first and stops with kap's
+own error if the script it would run is not declared:
+
+```console
+$ kap run
+kap: error: package.json declares no "start" script, which is what 'kap run' runs; this project has a "dev" script — try 'kap dev'
+```
+
+Nothing is spawned. This matters most for Vite, Next, Astro, and Remix projects,
+which ship a `dev` script and no `start` — `kap run` names `kap dev` rather than
+silently starting a file-watching server under a command called "run".
+
+To point a command at a script you already have, set the matching key:
+
+```toml
+[plugins.node]
+start_script = "serve"
+```
+
+The check is a substring test for `"<name>":`, because KPL has no JSON parser.
+It can be fooled by the same text elsewhere in the file, which costs a false
+pass — you get npm's own error, exactly as before — and never a false failure.
 | `workspace_glob` | string | `packages/*` | Where `dev` looks for workspaces |
 | `dev_all_workspaces` | bool | `true` | Run every workspace's `dev` at once |
 | `check` | bool | `false` | Makes `fmt` verify instead of rewrite |

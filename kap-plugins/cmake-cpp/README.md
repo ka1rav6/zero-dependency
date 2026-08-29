@@ -38,7 +38,7 @@ Set these in `./kap.toml` (committed, per project) or `~/.config/kap/config.toml
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `generator` | `auto` \| `ninja` \| `make` \| `unix_makefiles` | `auto` | `auto` passes `-G Ninja` when `ninja` is on PATH and otherwise lets CMake choose |
+| `generator` | `auto` \| `ninja` \| `make` \| `unix_makefiles` | `auto` | See below |
 | `build_dir` | string | `build` | Where to configure and build |
 | `build_type` | string | `Debug` | Value for `-DCMAKE_BUILD_TYPE` |
 | `cmake_args` | list of strings | `[]` | Extra flags appended to the configure step |
@@ -54,6 +54,30 @@ build_dir  = "out"
 build_type = "RelWithDebInfo"
 cmake_args = ["-DBUILD_TESTING=OFF"]
 ```
+
+### `generator = auto`
+
+`auto` answers in two steps:
+
+1. **If `<build_dir>/CMakeCache.txt` exists, pass no `-G` at all.** A configured
+   build directory already records its generator, CMake will reuse it, and CMake
+   *refuses* to be handed a different one:
+
+   ```
+   CMake Error: Error: generator : Ninja
+   Does not match the generator used previously: Unix Makefiles
+   ```
+
+   That error is why the rule exists. Point kap at a project someone configured
+   by hand with make and it has to keep working.
+
+2. **Otherwise prefer Ninja**, if `ninja` is on PATH; if it is not, pass no `-G`
+   and let CMake pick its platform default.
+
+The explicit values (`ninja`, `make`, `unix_makefiles`) always pass their `-G`,
+including into a configured directory — so pinning one that disagrees with an
+existing cache reproduces the error above. If you want to switch generators, run
+`kap clean` first, or delete the build directory.
 
 ## Tests
 

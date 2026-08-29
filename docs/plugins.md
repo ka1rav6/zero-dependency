@@ -235,6 +235,52 @@ concurrent true        // run every step at once, with labelled output (kap dev)
 report_freed_space     // print how much space was recovered (kap clean)
 ```
 
+### Refusing, when you can already tell it will not work
+
+`fail` ends the command. Nothing after it runs, nothing is spawned, and the
+message is printed as kap's own error:
+
+```kpl
+command run(project, config, extra) {
+  let manifest_text = project.read("package.json")
+  if !contains(manifest_text, "\"" + config.start_script + "\":") {
+    fail "package.json declares no \"" + config.start_script + "\" script"
+  }
+  step ["npm", "run", config.start_script] + extra
+}
+```
+
+Reach for it whenever the project itself tells you the step cannot succeed — a
+missing script, a required setting left empty, a lockfile that names a package
+manager you were not built for. The alternative is emitting the step anyway and
+letting the tool underneath produce the error, which throws away everything only
+your plugin knows:
+
+```
+npm error Missing script: "start"          # what npm can say
+```
+```
+kap: error: package.json declares no "start" script, which is what 'kap run'
+runs; this project has a "dev" script — try 'kap dev'
+```
+
+Both are true. Only the second knows which kap command chose the name, which
+config key changes it, and which sibling command the user actually wanted.
+
+Write the message for the person standing in the project, not for yourself.
+`fail` is **not** how you report a bug in your plugin — a bad `step`, an unknown
+identifier, or a type error is caught at load time and reported to you with a
+line number. A `fail` carries no location on purpose: `plugin.kpl:127` in front
+of someone whose problem is a missing npm script is noise.
+
+Steps already added before the `fail` are kept so `kap <command> -n` can show
+how far the plan got, but they are never run. A golden file asserts the outcome
+like any other:
+
+```json
+{ "command": "run", "failure": "package.json declares no \"start\" script", "steps": [] }
+```
+
 ---
 
 ## What a command can see

@@ -23,6 +23,7 @@ writing your own plugin, [plugins.md](plugins.md).
 - [Global flags](#global-flags)
 - [Passing arguments to the underlying tool](#passing-arguments-to-the-underlying-tool)
 - [`kap detect` — who owns this directory](#kap-detect--who-owns-this-directory)
+- [When a plugin declines](#when-a-plugin-declines)
 - [`kap doctor` — do I have what it needs](#kap-doctor--do-i-have-what-it-needs)
 - [`kap dev` — the development loop](#kap-dev--the-development-loop)
 - [`kap ci` — one command for a pipeline](#kap-ci--one-command-for-a-pipeline)
@@ -264,6 +265,33 @@ Reading that:
 - **cache** says whether the answer came from `.kap/cache.json`. Use
   `kap detect --refresh` to ignore it.
 
+When nothing claims the directory, kap shows what it tried:
+
+```console
+$ kap detect
+kap: error: no plugin claims /home/you/code/backend
+      note: these composable sidecars matched, and their commands are available: doctor ports
+      note: evaluated these plugins but none matched:
+      note: go (priority 45)
+      note:   ✗ file_exists "go.mod"
+      note:   ✗ file_exists "go.work"
+      note: cargo-rust (priority 40)
+      note:   ✗ file_exists "Cargo.toml"
+      note: python-uv (priority 38)
+      note:   ✗ file_exists "uv.lock"
+      note:   ✗ file_exists "pyproject.toml"
+      note: considered: cargo-rust cmake-cpp doctor go make-generic node ports python-uv
+```
+
+Each `✗` is a marker a plugin looked for and did not find. Above, the directory
+is full of `.py` files but has no packaging metadata, and the `python-uv` lines
+say so: give it a `pyproject.toml` — `uv init` will — and kap will claim it.
+
+The same list appears whenever a project command fails for want of an owner, so
+you rarely have to run `kap detect` by hand to see it. It is ranked by priority
+and capped at three, because detection considers every installed plugin and the
+whole list would bury the answer.
+
 If two plugins match at the same priority, kap refuses to guess:
 
 ```console
@@ -285,6 +313,37 @@ the way git finds `.git`:
 [detect]
 max_walk_up = 3
 ```
+
+---
+
+## When a plugin declines
+
+A plugin can look at your project and conclude that the command you asked for
+cannot work. It says so itself, instead of running a tool that is about to fail:
+
+```console
+$ kap run
+kap: error: package.json declares no "start" script, which is what 'kap run' runs; this project has a "dev" script — try 'kap dev'
+```
+
+Nothing was spawned. The exit code is 1, and the message is kap's, not the
+tool's — which is what lets it mention the three things only kap knows: that
+`kap run` picked the name `start`, that `start_script` in `kap.toml` can point
+it elsewhere, and that a sibling kap command already does what you wanted.
+
+You will meet this mostly in JavaScript projects, where there is no standard set
+of script names. Every one kap uses is configurable:
+
+```toml
+# kap.toml
+[plugins.node]
+start_script = "serve"
+build_script = "compile"
+```
+
+`kap <command> -n` shows the same message, so you can check without running
+anything. If you would rather have the underlying tool's error, point the
+script name at something that exists and let it fail on its own terms.
 
 ---
 
@@ -525,9 +584,11 @@ isolated kap, which is how kap's own tests stay hermetic.
 
 ## When something goes wrong
 
-**"no plugin claims …"** — nothing recognised the directory.
-`kap detect` lists what was considered. Either install a plugin
-(`kap plugin install --bundle core`), or write one ([plugins.md](plugins.md)).
+**"no plugin claims …"** — nothing recognised the directory. The error lists
+every marker the closest plugins looked for and did not find, so read those
+lines first: usually one of them names a file your project is simply missing
+(`pyproject.toml`, `go.mod`, a `Makefile`). Failing that, install a plugin
+(`kap plugin install --bundle core`) or write one ([plugins.md](plugins.md)).
 
 **"cannot tell which plugin owns …"** — two plugins matched at the same
 priority. Pin one:
@@ -543,10 +604,30 @@ README lists every key it accepts.
 **"cannot run 'cmake': No such file or directory"** — the tool is not
 installed. `kap doctor` will tell you everything that is missing at once.
 
+**"package.json declares no 'build' script"** — the plugin checked before
+running anything. Either add the script, or point kap at the one you already
+have: `kap build --set build_script=compile` for once,
+`[plugins.node] build_script = "compile"` in `kap.toml` for good. See
+[When a plugin declines](#when-a-plugin-declines).
+
+**"Does not match the generator used previously"** — CMake refusing a `-G` that
+contradicts an existing `build/CMakeCache.txt`. kap's `auto` no longer passes
+`-G` into a configured directory, so if you still see this you have pinned a
+generator explicitly. Either match what the cache holds, or delete the build
+directory (`kap clean`) and let it be configured fresh:
+
+```toml
+[plugins.cmake-cpp]
+generator = "make"      # or "ninja", or drop the key for auto
+```
+
 **kap is running the wrong command** — `kap build -n` shows the exact argv
 arrays, and `--verbose` adds which config files were read and which plugin was
 chosen. Between the two there is nothing hidden.
 
-**A stale answer after installing a plugin** — the detection cache should
-invalidate itself, but `kap detect --refresh` forces a rescan, and deleting
-`.kap/cache.json` is always safe.
+**A stale answer** — `.kap/cache.json` remembers which plugin owns a directory.
+Its key covers the directory listing, every plugin's identity and mtime, and
+kap's own version, so installing a plugin, adding a marker file, and upgrading
+kap all invalidate it on their own. The one case it cannot see is a marker
+created deep in a subdirectory that no existing rule watches. `kap detect
+--refresh` forces a rescan, and deleting `.kap/cache.json` is always safe.
