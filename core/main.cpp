@@ -103,6 +103,7 @@ std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 // the diagnostics and the dispatcher both need them and neither should be
 // moved just to satisfy the compiler's reading order.
 void report_no_plugins_anywhere(const std::filesystem::path& root);
+void print_near_misses(const kap::detect::Resolution& resolution);
 int run_plugin_install(const kap::cli::GlobalOptions& global, const std::vector<std::string>& args);
 
 // `detect.ecosystem` from <root>/kap.toml (design doc §3.2 step 4): the pin
@@ -187,6 +188,10 @@ int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::str
                     std::cerr << ' ' << match.name;
                 std::cerr << "\n";
             }
+            // The failure branch of the one command whose entire job is to
+            // explain the decision. Without this it restates the summary the
+            // caller already printed and answers "why" with nothing.
+            print_near_misses(resolution);
             if (plugins.empty()) {
                 report_no_plugins_anywhere(root);
             } else {
@@ -394,6 +399,22 @@ void report_no_plugins_anywhere(const std::filesystem::path& root)
     }
 }
 
+// Print near-miss information (plugins that were evaluated but scored 0).
+void print_near_misses(const kap::detect::Resolution& resolution)
+{
+    if (resolution.near_misses.empty())
+        return;
+
+    std::cerr << "      note: evaluated these plugins but none matched:\n";
+    for (const kap::detect::NearMiss& miss : resolution.near_misses) {
+        std::cerr << "      note: " << miss.name << " (priority " << miss.priority << ")\n";
+        for (const kap::detect::MarkerResult& marker : miss.markers) {
+            const std::string status = marker.fired ? "✓" : "✗";
+            std::cerr << "      note:   " << status << " " << marker.description << "\n";
+        }
+    }
+}
+
 // Explain a failed detection well enough to act on. "No plugin matched" alone
 // leaves a new user with nowhere to go, so this distinguishes "you have no
 // plugins" from "none of your plugins claims this directory" and prints any
@@ -403,6 +424,7 @@ int report_no_match(const Session& session)
     std::cerr << "kap: error: no plugin claims " << session.resolution.root.string() << "\n";
     for (const std::string& warning : session.resolution.warnings)
         std::cerr << "      note: " << warning << "\n";
+    print_near_misses(session.resolution);
     if (session.plugins.empty()) {
         report_no_plugins_anywhere(session.search_root);
     } else {
@@ -710,7 +732,9 @@ int dispatch_one(const Session&                                session,
                       << "\n      note: only these composable sidecars matched:";
             for (const kap::detect::Match& match : session.resolution.matches)
                 std::cerr << ' ' << match.name;
-            std::cerr << "\n      note: considered:";
+            std::cerr << "\n";
+            print_near_misses(session.resolution);
+            std::cerr << "      note: considered:";
             for (const kap::plugin::Located& located : session.plugins)
                 std::cerr << ' ' << located.name;
             std::cerr << "\n      note: run 'kap detect' to see why\n";

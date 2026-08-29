@@ -573,12 +573,14 @@ void write_cache(const std::filesystem::path& root,
 // Evaluate every plugin's rules against one directory. Plugins that cannot be
 // loaded, or that are too new (§12 Q2), are skipped with a warning rather than
 // aborting: an unrelated broken plugin must not break `kap build` here.
-std::vector<Match> scan_directory(const std::filesystem::path&        root,
-                                  const std::vector<plugin::Located>& plugins,
-                                  const std::filesystem::path&        ast_cache,
-                                  std::vector<std::string>&           warnings)
+std::pair<std::vector<Match>, std::vector<NearMiss>>
+scan_directory(const std::filesystem::path&        root,
+               const std::vector<plugin::Located>& plugins,
+               const std::filesystem::path&        ast_cache,
+               std::vector<std::string>&           warnings)
 {
-    std::vector<Match> matches;
+    std::vector<Match>    matches;
+    std::vector<NearMiss> near_misses;
     for (const plugin::Located& located : plugins) {
         if (!located.enabled)
             continue;
@@ -601,19 +603,51 @@ std::vector<Match> scan_directory(const std::filesystem::path&        root,
             match.name       = table.name;
             match.priority   = table.priority;
             match.composable = table.composable;
+
+            // Track each rule's result for near-miss diagnostics.
+            std::vector<MarkerResult> markers;
             for (const Rule& rule : table.rules) {
-                if (evaluate(rule, root, match.matched_files))
+                MarkerResult result;
+                result.description = describe_rule(rule);
+                result.fired       = evaluate(rule, root, match.matched_files);
+                markers.push_back(result);
+                if (result.fired)
                     ++match.score;
             }
-            if (match.score > 0)
+
+            if (match.score > 0) {
                 matches.push_back(std::move(match));
+            } else {
+                // Record why this plugin didn't match for diagnostic output.
+                NearMiss miss;
+                miss.name     = table.name;
+                miss.priority = table.priority;
+                miss.markers  = std::move(markers);
+                near_misses.push_back(std::move(miss));
+            }
         }
         catch (const diag::Error& error) {
             warnings.push_back("skipping plugin '" + located.name +
                                "': " + error.diagnostic().message);
         }
     }
-    return matches;
+    return {std::move(matches), std::move(near_misses)};
+}
+
+// Order near-misses for display and cap the list. Detection considers every
+// installed plugin, so an uncapped list is two dozen lines of "not found" for
+// a directory whose problem is usually obvious once the top candidate is
+// shown. Highest priority first: that is the plugin that would have won.
+std::vector<NearMiss> rank_near_misses(std::vector<NearMiss> misses)
+{
+    std::sort(misses.begin(), misses.end(), [](const NearMiss& left, const NearMiss& right) {
+        if (left.priority != right.priority)
+            return left.priority > right.priority;
+        return left.name < right.name;
+    });
+    if (misses.size() > kNearMissLimit)
+        misses.resize(kNearMissLimit);
+    return misses;
 }
 
 // §3.2 step 3/4: drop anything another matched plugin supersedes.
@@ -668,11 +702,22 @@ Resolution resolve(const std::filesystem::path&        start,
             if (auto cached = read_cache(root, plugins, key); cached) {
                 resolution.matches    = std::move(*cached);
                 resolution.from_cache = true;
+                // Near-misses are deliberately not serialised: they are
+                // diagnostics, not part of the answer. When the cached answer
+                // is a failure the caller is about to print an explanation, so
+                // pay for one rescan here rather than cache an explanation
+                // that could go stale independently of the decision.
+                if (resolution.primary() == nullptr) {
+                    auto [rescan_matches, rescan_misses] =
+                        scan_directory(root, plugins, options.ast_cache, resolution.warnings);
+                    (void) rescan_matches;
+                    resolution.near_misses = rank_near_misses(std::move(rescan_misses));
+                }
                 return resolution;
             }
         }
 
-        std::vector<Match> matches =
+        auto [matches, near_misses] =
             scan_directory(root, plugins, options.ast_cache, resolution.warnings);
 
         if (!matches.empty()) {
@@ -680,6 +725,11 @@ Resolution resolve(const std::filesystem::path&        start,
         }
 
         if (matches.empty()) {
+            // Only keep near-misses if this is the final level and nothing
+            // matched at all. They are diagnostic information for explaining
+            // why detection failed.
+            if (level == levels)
+                resolution.near_misses = rank_near_misses(std::move(near_misses));
             // Nothing here. Walking up is only worth it when a level remains;
             // at the last level this is the final answer and worth caching, so
             // a repeated `kap build` in a non-project directory stays cheap.
@@ -760,12 +810,52 @@ Resolution resolve(const std::filesystem::path&        start,
             chosen.push_back(std::move(sidecar));
 
         resolution.matches = std::move(chosen);
+
+        // `doctor` and `ports` are composable and claim every directory, so
+        // `matches` is never empty in practice and the branch above almost
+        // never runs. A directory owned only by sidecars is still an
+        // unclaimed directory as far as `build`/`test`/`run` are concerned,
+        // and that is exactly the case a near-miss list has to explain.
+        if (resolution.primary() == nullptr)
+            resolution.near_misses = rank_near_misses(std::move(near_misses));
+
         if (options.write_cache)
             write_cache(root, key, resolution.matches);
         return resolution;
     }
 
     return resolution;
+}
+
+std::string describe_rule(const Rule& rule)
+{
+    switch (rule.kind) {
+        case Rule::Kind::FileExists:
+            if (rule.patterns.size() == 1)
+                return "file_exists \"" + rule.patterns[0] + "\"";
+            break;
+        case Rule::Kind::FileExistsAny:
+            {
+                std::string desc = "file_exists_any [";
+                for (std::size_t i = 0; i < rule.patterns.size(); ++i) {
+                    if (i > 0)
+                        desc += ", ";
+                    desc += "\"" + rule.patterns[i] + "\"";
+                }
+                desc += "]";
+                return desc;
+            }
+        case Rule::Kind::DirExists:
+            if (rule.patterns.size() == 1)
+                return "dir_exists \"" + rule.patterns[0] + "\"";
+            break;
+        case Rule::Kind::FileContains:
+            if (rule.patterns.size() == 1)
+                return "file_contains { path: \"" + rule.patterns[0] + "\", pattern: \"" +
+                       rule.pattern + "\" }";
+            break;
+    }
+    return "unknown rule";
 }
 
 } // namespace detect

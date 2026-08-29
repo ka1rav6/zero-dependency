@@ -27,6 +27,7 @@
 // resolution separate from rule evaluation is what makes that policy readable
 // and testable on its own.
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -72,6 +73,26 @@ struct Rule
     diag::Location location;
 };
 
+// Result of evaluating one detection rule for diagnostic output.
+struct MarkerResult
+{
+    std::string description;
+    bool        fired = false;
+};
+
+// How many near-misses `resolve` keeps. Detection considers every installed
+// plugin, so the full list is mostly noise; the highest-priority few are the
+// ones that would plausibly have claimed the directory.
+inline constexpr std::size_t kNearMissLimit = 3;
+
+// A plugin that was evaluated but scored 0 (no rules fired).
+struct NearMiss
+{
+    std::string               name;
+    int                       priority = 0;
+    std::vector<MarkerResult> markers;
+};
+
 // A plugin's whole detection surface, extracted from its AST once.
 struct RuleTable
 {
@@ -96,6 +117,9 @@ RuleTable compile(const kpl::Plugin& plugin, const std::string& fallback_name = 
 bool evaluate(const Rule&                  rule,
               const std::filesystem::path& root,
               std::vector<std::string>&    matched_files);
+
+// Describe a rule in human-readable form for diagnostics (e.g., "file_exists \"CMakeLists.txt\"").
+std::string describe_rule(const Rule& rule);
 
 // One plugin that matched.
 struct Match
@@ -144,6 +168,16 @@ struct Resolution
     // The winning plugin first, then every `composable: true` plugin that also
     // matched (§3.3), in descending priority. Empty when nothing matched.
     std::vector<Match> matches;
+
+    // Plugins that were evaluated but scored 0 (no rules fired), ranked by
+    // priority and capped at kNearMissLimit. Populated whenever detection
+    // failed to find an owner — which means whenever `primary()` is null, not
+    // merely when `matches` is empty: the composable sidecars (§3.3) match
+    // every directory, so `matches` is essentially never empty and testing it
+    // would leave this list permanently unfilled.
+    //
+    // Diagnostics only. Never serialised into .kap/cache.json.
+    std::vector<NearMiss> near_misses;
 
     // True when the whole answer came from .kap/cache.json without a scan.
     bool from_cache = false;
