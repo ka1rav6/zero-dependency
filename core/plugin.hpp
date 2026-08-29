@@ -42,6 +42,19 @@ struct CaseResult
     std::string detail; // empty when passed; otherwise the expected/actual diff
 };
 
+// One plugin that matched the detection rules in a project root.
+struct DetectionMatch
+{
+    Located located;
+    std::vector<std::string> matched_files;
+    int                      score = 0;
+};
+
+// Evaluate the bundled plugin manifests and detect rules against `root`.
+// Returns the winning plugin(s) in priority order: a single result when one
+// plugin wins, or an empty vector when nothing matched.
+std::vector<DetectionMatch> detect(const std::filesystem::path& root);
+
 // Run every fixture test case a plugin declares.
 //
 // The layout (design doc §5.2, with the fixture-to-expectation binding made

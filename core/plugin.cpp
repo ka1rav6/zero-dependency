@@ -238,6 +238,259 @@ std::vector<Located> discover(const std::filesystem::path& root)
     return found;
 }
 
+namespace
+{
+
+std::optional<int> manifest_integer(const kpl::Plugin& plugin, const char* key)
+{
+    if (!plugin.manifest)
+        return std::nullopt;
+    for (const kpl::Statement& statement : plugin.manifest->statements) {
+        if (statement.kind != kpl::Statement::Kind::Assignment || statement.name != key)
+            continue;
+        if (statement.expressions.empty())
+            return std::nullopt;
+        const kpl::Expr& value = statement.expressions.front();
+        if (value.kind == kpl::Expr::Kind::Integer)
+            return static_cast<int>(value.token.integer);
+    }
+    return std::nullopt;
+}
+
+std::vector<std::string> manifest_string_list(const kpl::Plugin& plugin, const char* key)
+{
+    std::vector<std::string> result;
+    if (!plugin.manifest)
+        return result;
+    for (const kpl::Statement& statement : plugin.manifest->statements) {
+        if (statement.kind != kpl::Statement::Kind::Assignment || statement.name != key)
+            continue;
+        if (statement.expressions.empty())
+            return result;
+        const kpl::Expr& value = statement.expressions.front();
+        if (value.kind != kpl::Expr::Kind::List)
+            return result;
+        for (const kpl::Expr& item : value.children) {
+            if (item.kind == kpl::Expr::Kind::String)
+                result.push_back(item.token.text);
+            else if (item.kind == kpl::Expr::Kind::Name)
+                result.push_back(item.token.text);
+        }
+    }
+    return result;
+}
+
+bool is_rule_satisfied(const std::filesystem::path& root,
+                       const std::string&          rule_name,
+                       const std::vector<kpl::Expr>& expressions,
+                       std::vector<std::string>& matched_files)
+{
+    if (rule_name == "file_exists") {
+        if (expressions.size() != 1 || expressions.front().kind != kpl::Expr::Kind::String)
+            return false;
+        const std::filesystem::path path = root / expressions.front().token.text;
+        if (fs::exists(path)) {
+            matched_files.push_back(expressions.front().token.text);
+            return true;
+        }
+        return false;
+    }
+    if (rule_name == "dir_exists") {
+        if (expressions.size() != 1 || expressions.front().kind != kpl::Expr::Kind::String)
+            return false;
+        const std::filesystem::path path = root / expressions.front().token.text;
+        if (fs::is_dir(path)) {
+            matched_files.push_back(expressions.front().token.text);
+            return true;
+        }
+        return false;
+    }
+    if (rule_name == "file_exists_any") {
+        if (expressions.size() != 1 || expressions.front().kind != kpl::Expr::Kind::List)
+            return false;
+        for (const kpl::Expr& item : expressions.front().children) {
+            if (item.kind == kpl::Expr::Kind::String) {
+                const std::filesystem::path path = root / item.token.text;
+                if (fs::exists(path)) {
+                    matched_files.push_back(item.token.text);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if (rule_name == "file_contains") {
+        if (expressions.size() != 1 || expressions.front().kind != kpl::Expr::Kind::Record)
+            return false;
+        std::string path_text;
+        std::string pattern_text;
+        for (std::size_t index = 0; index < expressions.front().names.size(); ++index) {
+            if (expressions.front().names[index] == "path" &&
+                expressions.front().children[index].kind == kpl::Expr::Kind::String)
+                path_text = expressions.front().children[index].token.text;
+            if (expressions.front().names[index] == "pattern" &&
+                expressions.front().children[index].kind == kpl::Expr::Kind::String)
+                pattern_text = expressions.front().children[index].token.text;
+        }
+        if (path_text.empty() || pattern_text.empty())
+            return false;
+        const std::filesystem::path path = root / path_text;
+        if (!fs::is_file(path))
+            return false;
+        try {
+            const std::string contents = fs::read_text(path);
+            if (contents.find(pattern_text) != std::string::npos) {
+                matched_files.push_back(path_text);
+                return true;
+            }
+        }
+        catch (const diag::Error&) {
+            return false;
+        }
+        return false;
+    }
+    return false;
+}
+
+std::vector<std::string> cached_match_names(const std::filesystem::path& cache_path,
+                                            const std::filesystem::path& root)
+{
+    if (!fs::exists(cache_path))
+        return {};
+    try {
+        const json::Value doc = json::parse(fs::read_text(cache_path), cache_path.string());
+        if (doc.kind != json::Value::Kind::Object)
+            return {};
+        const json::Value* root_value = doc.find("root");
+        const json::Value* names_value = doc.find("plugins");
+        if (root_value == nullptr || root_value->kind != json::Value::Kind::String ||
+            names_value == nullptr || names_value->kind != json::Value::Kind::Array)
+            return {};
+        if (root_value->string != root.string())
+            return {};
+
+        std::vector<std::string> names;
+        for (const json::Value& entry : names_value->array) {
+            if (entry.kind == json::Value::Kind::String)
+                names.push_back(entry.string);
+        }
+        return names;
+    }
+    catch (const diag::Error&) {
+        return {};
+    }
+}
+
+void write_detection_cache(const std::filesystem::path& root,
+                           const std::vector<DetectionMatch>& matches)
+{
+    const std::filesystem::path cache_dir = root / ".kap";
+    const std::filesystem::path cache_path = cache_dir / "cache.json";
+    std::filesystem::create_directories(cache_dir);
+    std::vector<json::Value> plugins;
+    plugins.reserve(matches.size());
+    for (const DetectionMatch& match : matches) {
+        plugins.push_back(json::make_string(match.located.name));
+    }
+    const json::Value doc = json::make_object({
+        {"root", json::make_string(root.string())},
+        {"plugins", json::make_array(std::move(plugins))},
+    });
+    std::ofstream out(cache_path, std::ios::binary | std::ios::trunc);
+    out << json::write(doc, true);
+}
+
+} // namespace
+
+std::vector<DetectionMatch> detect(const std::filesystem::path& root)
+{
+    const std::filesystem::path cache_path = root / ".kap" / "cache.json";
+    if (const auto cached = cached_match_names(cache_path, root); !cached.empty()) {
+        std::vector<DetectionMatch> result;
+        const std::vector<Located>  discovered = discover(root);
+        for (const Located& located : discovered) {
+            const auto it = std::find(cached.begin(), cached.end(), located.name);
+            if (it != cached.end()) {
+                DetectionMatch match;
+                match.located = located;
+                match.score   = manifest_integer(kapc::load(located.manifest, {}).plugin, "priority")
+                                    .value_or(0);
+                result.push_back(match);
+            }
+        }
+        return result;
+    }
+
+    std::vector<DetectionMatch> matches;
+    for (const Located& located : discover(root)) {
+        try {
+            const kpl::Plugin plugin = kapc::load(located.manifest, {}).plugin;
+            const std::optional<int> priority = manifest_integer(plugin, "priority");
+            if (!priority)
+                continue;
+
+            std::vector<std::string> matched_files;
+            bool matched = false;
+            if (plugin.detect) {
+                for (const kpl::Statement& statement : plugin.detect->statements) {
+                    if (statement.kind != kpl::Statement::Kind::Directive)
+                        continue;
+                    if (is_rule_satisfied(root, statement.name, statement.expressions, matched_files)) {
+                        matched = true;
+                    }
+                }
+            }
+            if (matched) {
+                DetectionMatch match;
+                match.located = located;
+                match.score   = *priority;
+                match.matched_files = matched_files;
+                matches.push_back(match);
+            }
+        }
+        catch (const diag::Error&) {
+            continue;
+        }
+    }
+
+    std::vector<DetectionMatch> survivors;
+    for (DetectionMatch& candidate : matches) {
+        bool superseded = false;
+        for (const DetectionMatch& other : matches) {
+            if (&candidate == &other)
+                continue;
+            const std::vector<std::string> others = manifest_string_list(
+                kapc::load(other.located.manifest, {}).plugin, "supersedes");
+            if (std::find(others.begin(), others.end(), candidate.located.name) != others.end()) {
+                superseded = true;
+                break;
+            }
+        }
+        if (!superseded)
+            survivors.push_back(candidate);
+    }
+
+    if (survivors.empty()) {
+        write_detection_cache(root, {});
+        return {};
+    }
+
+    std::sort(survivors.begin(), survivors.end(),
+              [](const DetectionMatch& left, const DetectionMatch& right) {
+                  if (left.score != right.score)
+                      return left.score > right.score;
+                  return left.located.name < right.located.name;
+              });
+    if (survivors.size() > 1 && survivors.front().score == survivors[1].score) {
+        throw diag::Error{diag::error("detection tie: multiple plugins match at priority " +
+                                     std::to_string(survivors.front().score) +
+                                     "; pin one in kap.toml")};
+    }
+
+    write_detection_cache(root, survivors);
+    return {survivors.front()};
+}
+
 std::vector<CaseResult> run_tests(const Located& located, const std::filesystem::path& cache)
 {
     std::vector<CaseResult> results;
