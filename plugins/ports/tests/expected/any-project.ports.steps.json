@@ -1,0 +1,7 @@
+{
+  "command": "ports",
+  "tools": ["ss", "lsof", "netstat"],
+  "steps": [
+    { "cmd": ["ss", "-t", "-l", "-n", "-p"] }
+  ]
+}

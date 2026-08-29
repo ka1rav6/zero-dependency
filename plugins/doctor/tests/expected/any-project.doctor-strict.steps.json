@@ -1,0 +1,18 @@
+{
+  "fixture": "any-project",
+  "command": "doctor",
+  "config": {
+    "matched_plugins": [],
+    "required_tools": ["make"],
+    "optional_tools": ["gmake"],
+    "strict": true
+  },
+  "tools": ["make"],
+  "steps": [
+    { "cmd": ["echo", "kap doctor"] },
+    { "cmd": ["echo", "  ok       make"] },
+    { "cmd": ["echo", "  --       gmake  (optional, not installed)"] },
+    { "cmd": ["echo", "unhealthy: strict mode, and an optional tool is missing"] },
+    { "cmd": ["false"] }
+  ]
+}

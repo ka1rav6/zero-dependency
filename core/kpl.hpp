@@ -257,6 +257,23 @@ CommandSpec evaluate(const Plugin&                       plugin,
 json::Value to_json(const CommandSpec& spec);
 CommandSpec spec_from_json(const json::Value& value, const std::string& source_name = {});
 
+// The tools a plugin declares it needs (design doc §5.3's `requires` block).
+//
+// `required` comes from `any_of` and `optional` from `optional`. The names are
+// plain program names, looked up on PATH exactly as `project.tool()` does.
+//
+// Read by `kap doctor`: §4 says doctor ships as a bundled KPL plugin rather
+// than as hardcoded C++, but KPL has no way to see *other* plugins, so the core
+// collects this and injects it into the doctor plugin's `config` record. The
+// policy — what counts as healthy, what to print — stays in KPL.
+struct Requirements
+{
+    std::vector<std::string> required;
+    std::vector<std::string> optional;
+};
+
+Requirements requirements(const Plugin& plugin);
+
 // Validate the manifest contract used by the plugin loader. The parser keeps
 // blocks generic so later KPL features can evolve independently; this check
 // is the narrow compatibility gate needed by `kap plugin doctor`.

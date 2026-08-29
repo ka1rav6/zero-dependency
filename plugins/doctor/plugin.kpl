@@ -1,0 +1,138 @@
+// doctor — check that the tools this project's plugins need are installed.
+//
+// One of the two bundled system plugins (design doc §6.6). §4 is explicit
+// about why they are written in KPL rather than C++: "proving the DSL is
+// expressive enough for system introspection, not just shelling out to a build
+// tool."
+//
+// ## How it learns what to check
+//
+// KPL has no way to see other plugins — that is a deliberate sandbox property
+// (§7), not an oversight. So the core does the one thing only it can: it reads
+// the `requires` block of every plugin that matched this directory and injects
+// the result into this plugin's `config` record, through the schema fields
+// below. Everything after that — what to check, what counts as healthy, what to
+// print — is decided here, in KPL.
+//
+// The defaults are empty lists, so this plugin still type-checks and still runs
+// when evaluated standalone (as `kap plugin test` does); it simply finds
+// nothing to report.
+
+manifest {
+  name        = "doctor"
+  version     = "1.0.0"
+  api_version = 1
+
+  // Lowest possible priority, and composable: this plugin rides alongside
+  // whichever plugin actually owns the project (§3.3). It never wants to be the
+  // one that answers `kap build`.
+  priority    = 1
+  composable  = true
+  supersedes  = []
+}
+
+detect {
+  // Always matches. Every directory is a directory, and a diagnostics plugin
+  // that only worked in *some* directories would be useless in exactly the
+  // situation you reach for it.
+  dir_exists "."
+}
+
+requires {
+  // Nothing: doctor's whole job is to report on other plugins' requirements,
+  // and it uses only builtins to do it.
+  any_of   []
+  optional []
+}
+
+schema {
+  // Injected by the core from the matched plugins' `requires` blocks.
+  //
+  // Each element of `required_tools` is one `any_of` group, comma-joined:
+  // `cmake` is a group of one, `ss,lsof,netstat` a group of three of which any
+  // one satisfies the requirement. Flattening them would report a machine with
+  // `ss` installed as missing `lsof` and `netstat`, which is exactly backwards.
+  //
+  // `optional_tools` has no such grouping — each entry stands alone.
+  required_tools:  list<str> = []
+  optional_tools:  list<str> = []
+  matched_plugins: list<str> = []
+
+  // With `strict = false`, a missing *optional* tool is reported but does not
+  // make `kap doctor` fail. Turn it on in CI if you want the softer warnings to
+  // be errors too.
+  strict: bool = false
+}
+
+command doctor(project, config) {
+  step ["echo", "kap doctor"]
+
+  // Which plugins are in play. Worth printing even when everything is fine:
+  // "doctor says I'm healthy" means much less if you do not know what it
+  // checked.
+  for name in config.matched_plugins {
+    step ["echo", "  plugin   " + name]
+  }
+
+  // Required tools, one `any_of` group at a time.
+  //
+  // `missing` accumulates across the loop so the summary below can both name
+  // the problem and set the exit status. KPL is flat-scoped, which is what
+  // makes an assignment inside the loop visible after it.
+  let missing = []
+  for group in config.required_tools {
+    let names = split(group, ",")
+
+    // The first installed alternative wins. `found` doubles as the "have we
+    // already got one" flag, since KPL has no `break`.
+    let found = ""
+    for name in names {
+      if found == "" && project.tool(name) {
+        found = name
+      }
+    }
+
+    if found != "" {
+      step ["echo", "  ok       " + found]
+    } else {
+      missing = missing + [group]
+      if len(names) > 1 {
+        step ["echo", "  MISSING  " + group + "  (need any one of these)"]
+      } else {
+        step ["echo", "  MISSING  " + group + "  (required)"]
+      }
+    }
+  }
+
+  // Optional tools. Absence is information, not a failure — `ccache` not being
+  // installed is a slower build, not a broken one.
+  let absent_optional = []
+  for tool in config.optional_tools {
+    if project.tool(tool) {
+      step ["echo", "  ok       " + tool + "  (optional)"]
+    } else {
+      absent_optional = absent_optional + [tool]
+      step ["echo", "  --       " + tool + "  (optional, not installed)"]
+    }
+  }
+
+  if len(config.required_tools) == 0 && len(config.optional_tools) == 0 {
+    step ["echo", "  nothing to check: no matched plugin declares a requires block"]
+  }
+
+  // The verdict, and the exit status.
+  //
+  // `false` is how a step-based DSL fails on purpose: it is a real program that
+  // exits 1, and because the executor stops at the first failing step, putting
+  // it last means every line above is printed first. A `kap doctor` that
+  // reported problems and still exited 0 would be useless in CI.
+  if len(missing) > 0 {
+    step ["echo", "unhealthy: install the tools marked MISSING above"]
+    step ["false"]
+  } else if config.strict && len(absent_optional) > 0 {
+    step ["echo", "unhealthy: strict mode, and an optional tool is missing"]
+    step ["false"]
+  } else {
+    step ["echo", "healthy"]
+  }
+}

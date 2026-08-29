@@ -458,3 +458,126 @@ KAP_TEST("a value written by set_key is readable by load")
 
     std::filesystem::remove_all(root);
 });
+
+// --- core-injected values (Milestone 9) ---------------------------------------------
+//
+// `kap doctor` ships as a KPL plugin (§4), and the core supplies the one thing
+// KPL cannot see for itself: what the *other* matched plugins require. These
+// tests pin where that injection sits in §5.12's precedence chain.
+
+namespace
+{
+
+// A plugin shaped like the bundled `doctor`: it declares the fields the core
+// injects, with empty defaults so it still works standalone.
+const char* kInjectablePlugin = R"(
+manifest { name = "doctor" version = "1.0.0" api_version = 1 priority = 1 }
+detect { dir_exists "." }
+schema {
+  required_tools: list<str> = []
+  strict:         bool      = false
+}
+command doctor(project, config) { step ["echo", "ok"] }
+)";
+
+std::map<std::string, kap::kpl::Value> tool_list(std::vector<std::string> names)
+{
+    std::vector<kap::kpl::Value> values;
+    for (std::string& name : names)
+        values.push_back(kap::kpl::Value::string_value(std::move(name)));
+    std::map<std::string, kap::kpl::Value> injected;
+    injected["required_tools"] = kap::kpl::Value::list_value(std::move(values));
+    return injected;
+}
+
+} // namespace
+
+KAP_TEST("an injected value reaches the config record")
+{
+    const std::filesystem::path root = scratch_root("inject");
+    ScopedConfigHome            home(root / "xdg");
+
+    const kap::config::PluginConfig config =
+        kap::config::for_plugin(kap::kpl::parse(kInjectablePlugin),
+                                "doctor",
+                                kap::config::load(root),
+                                {},
+                                tool_list({"cmake", "ninja"}));
+
+    KAP_ASSERT(config.errors.empty());
+    KAP_ASSERT_EQ(config.values.at("required_tools").list.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(config.values.at("required_tools").list[0].string, std::string("cmake"));
+
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("kap.toml overrides an injected value")
+{
+    // Injection sits at the bottom of §5.12's chain, just above the schema
+    // defaults, so "later wins" holds with no exception. The alternative —
+    // making the injection unoverridable so a project could not understate what
+    // doctor checks — buys nothing: a committed kap.toml already runs arbitrary
+    // shell through §5.13's hooks. What it costs is the ability to experiment.
+    const std::filesystem::path root = scratch_root("inject-override");
+    ScopedConfigHome            home(root / "xdg");
+    write_file(root / "kap.toml", "[plugins.doctor]\nrequired_tools = [\"ss,lsof\"]\n");
+
+    const kap::config::PluginConfig config =
+        kap::config::for_plugin(kap::kpl::parse(kInjectablePlugin),
+                                "doctor",
+                                kap::config::load(root),
+                                {},
+                                tool_list({"cmake"}));
+
+    KAP_ASSERT(config.errors.empty());
+    KAP_ASSERT_EQ(config.values.at("required_tools").list.size(), static_cast<std::size_t>(1));
+    // A comma-joined `any_of` group is a single string, which is why it can be
+    // expressed in a TOML array element but not through --set.
+    KAP_ASSERT_EQ(config.values.at("required_tools").list[0].string, std::string("ss,lsof"));
+
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("--set overrides an injected value")
+{
+    const std::filesystem::path root = scratch_root("inject-set");
+    ScopedConfigHome            home(root / "xdg");
+
+    const kap::config::PluginConfig config =
+        kap::config::for_plugin(kap::kpl::parse(kInjectablePlugin),
+                                "doctor",
+                                kap::config::load(root),
+                                {"required_tools=only-this"},
+                                tool_list({"cmake", "ninja"}));
+
+    KAP_ASSERT(config.errors.empty());
+    KAP_ASSERT_EQ(config.values.at("required_tools").list.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(config.values.at("required_tools").list[0].string, std::string("only-this"));
+
+    std::filesystem::remove_all(root);
+});
+
+KAP_TEST("an injected key the schema does not declare is dropped, not reported")
+{
+    // A plugin that defines `doctor` without declaring `required_tools` is not
+    // asking for the injection, and it is certainly not misconfigured. Adding a
+    // field its type checker never saw would also be a hole in §5.7's promise
+    // that `config` matches the schema.
+    const std::filesystem::path root = scratch_root("inject-undeclared");
+    ScopedConfigHome            home(root / "xdg");
+
+    const kap::kpl::Plugin plugin = kap::kpl::parse(R"(
+manifest { name = "plain" version = "1.0.0" api_version = 1 }
+schema { greeting: str = "hi" }
+command doctor(project, config) { step ["echo", config.greeting] }
+)");
+
+    const kap::config::PluginConfig config =
+        kap::config::for_plugin(plugin, "plain", kap::config::load(root), {}, tool_list({"cmake"}));
+
+    KAP_ASSERT(config.errors.empty());
+    KAP_ASSERT(config.values.find("required_tools") == config.values.end());
+    KAP_ASSERT_EQ(config.values.at("greeting").string, std::string("hi"));
+
+    std::filesystem::remove_all(root);
+});

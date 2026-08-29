@@ -153,8 +153,20 @@ int run_detect(const kap::cli::GlobalOptions& global, const std::vector<std::str
         for (const std::string& warning : resolution.warnings)
             std::cerr << "kap: warning: " << warning << "\n";
 
-        if (!resolution.matched()) {
+        // A composable sidecar (§3.3) matching is not the same as the
+        // directory being *owned*. `doctor` and `ports` claim every directory,
+        // so reporting them and exiting 0 would answer "which plugin owns
+        // this?" with a confident "doctor" — which is wrong, and would send
+        // someone hunting for a missing command instead of a missing plugin.
+        if (resolution.primary() == nullptr) {
             std::cerr << "kap: error: no plugin claims " << resolution.root.string() << "\n";
+            if (resolution.matched()) {
+                std::cerr << "      note: these composable sidecars matched, and their commands "
+                             "are available:";
+                for (const kap::detect::Match& match : resolution.matches)
+                    std::cerr << ' ' << match.name;
+                std::cerr << "\n";
+            }
             if (plugins.empty()) {
                 std::cerr << "      note: no plugins are installed; try 'kap plugin install "
                              "--bundle core'\n";
@@ -372,10 +384,11 @@ evaluate_command(const Session&                                session,
         return std::nullopt;
     }
 
+    // The core's own contribution to this plugin's config (today: `doctor`'s
+    // tool lists) is passed *into* the merge rather than written over the top
+    // of it, so the §5.12 precedence chain still applies to it unchanged.
     kap::config::PluginConfig plugin_config =
-        kap::config::for_plugin(loaded.ast, name, session.config, global.set_values);
-    for (const auto& [key, value] : injected)
-        plugin_config.values[key] = value;
+        kap::config::for_plugin(loaded.ast, name, session.config, global.set_values, injected);
 
     if (!plugin_config.errors.empty()) {
         std::cerr << "kap: error: configuration for plugin '" << name << "' is not usable\n";
@@ -407,6 +420,91 @@ int run_hook_phase(const Session&            session,
     return kap::exec::run_hook(*hook, phase + "_" + command, options).exit_code;
 }
 
+// Build the `config` values the core injects into the bundled `doctor` plugin
+// (design doc §4 and Milestone 9).
+//
+// §4 says doctor ships as a KPL plugin, "not hardcoded C++". KPL has no way to
+// see *other* plugins — that is a deliberate sandbox property (§7), not an
+// oversight — so the one thing only the core can do is read every matched
+// plugin's `requires` block and hand the result over. What to check, what
+// counts as healthy, and what to print all stay in plugins/doctor/plugin.kpl.
+//
+// The injected keys are ordinary schema fields with empty-list defaults, so the
+// plugin still type-checks and still runs standalone (which is how
+// `kap plugin test` exercises it).
+std::map<std::string, kap::kpl::Value> doctor_injection(const Session& session)
+{
+    const std::filesystem::path ast_cache = kap::kapc::cache_directory();
+
+    std::vector<std::string> required;
+    std::vector<std::string> optional;
+    std::vector<std::string> names;
+
+    for (const kap::detect::Match& match : session.resolution.matches) {
+        names.push_back(match.name);
+        kap::kpl::Plugin ast;
+        try {
+            ast = kap::kapc::load(match.located.manifest, ast_cache).plugin;
+        }
+        catch (const kap::diag::Error&) {
+            continue;
+        }
+        const kap::kpl::Requirements needs = kap::kpl::requirements(ast);
+
+        // `any_of` means *one* of these is enough, and flattening the list
+        // would turn `any_of [ss, lsof, netstat]` into three separate
+        // requirements — reporting a healthy machine as missing two tools.
+        //
+        // The group is preserved as a single comma-joined element, which the
+        // doctor plugin splits with the `split` builtin (§5.8). Encoding it in
+        // a string rather than adding a nested-list config type keeps the KPL
+        // type system exactly as §5.6 describes it.
+        std::string group;
+        for (const std::string& tool : needs.required)
+            group += (group.empty() ? "" : ",") + tool;
+        if (!group.empty())
+            required.push_back(std::move(group));
+
+        // `optional` has no such grouping: each entry stands alone.
+        optional.insert(optional.end(), needs.optional.begin(), needs.optional.end());
+    }
+
+    // Two plugins may need the same tool (or the same group); reporting `cmake`
+    // twice would be noise. Sorting as well as deduplicating keeps the output
+    // stable, which matters because these lists become a golden file in the
+    // plugin's own tests.
+    const auto tidy = [](std::vector<std::string>& items) {
+        std::sort(items.begin(), items.end());
+        items.erase(std::unique(items.begin(), items.end()), items.end());
+    };
+    tidy(required);
+    tidy(optional);
+
+    // A tool that is required by one plugin and merely optional to another is
+    // required overall — the stricter claim is the true one.
+    optional.erase(std::remove_if(optional.begin(),
+                                  optional.end(),
+                                  [&required](const std::string& name) {
+                                      return std::find(required.begin(), required.end(), name) !=
+                                             required.end();
+                                  }),
+                   optional.end());
+
+    const auto to_list = [](const std::vector<std::string>& items) {
+        std::vector<kap::kpl::Value> values;
+        values.reserve(items.size());
+        for (const std::string& item : items)
+            values.push_back(kap::kpl::Value::string_value(item));
+        return kap::kpl::Value::list_value(std::move(values));
+    };
+
+    std::map<std::string, kap::kpl::Value> injected;
+    injected["required_tools"]  = to_list(required);
+    injected["optional_tools"]  = to_list(optional);
+    injected["matched_plugins"] = to_list(names);
+    return injected;
+}
+
 // One command, end to end: find its plugin, evaluate it, run the hooks and the
 // steps. Returns the exit status kap should exit with.
 int dispatch_one(const Session&                                session,
@@ -421,9 +519,23 @@ int dispatch_one(const Session&                                session,
     if (!loaded) {
         const kap::detect::Match* primary = session.resolution.primary();
         std::cerr << "kap: error: no matched plugin defines a '" << command << "' command\n";
-        if (primary != nullptr)
+        if (primary != nullptr) {
             std::cerr << "      note: '" << primary->name << "' claims "
                       << session.resolution.root.string() << "\n";
+        } else {
+            // Only composable sidecars matched (§3.3) — `doctor` and `ports`
+            // claim every directory. Saying "no plugin defines build" without
+            // saying that nothing *owns* this directory would send the user
+            // looking for a missing command rather than a missing plugin.
+            std::cerr << "      note: no plugin claims " << session.resolution.root.string()
+                      << "\n      note: only these composable sidecars matched:";
+            for (const kap::detect::Match& match : session.resolution.matches)
+                std::cerr << ' ' << match.name;
+            std::cerr << "\n      note: considered:";
+            for (const kap::plugin::Located& located : session.plugins)
+                std::cerr << ' ' << located.name;
+            std::cerr << "\n      note: run 'kap detect' to see why\n";
+        }
         if (available.empty()) {
             std::cerr << "      note: it defines no commands at all\n";
         } else {
@@ -544,7 +656,13 @@ int run_project_command(const std::string& command, const kap::cli::Invocation& 
 
     if (command == "ci")
         return dispatch_ci(session, inv.global, inv.passthrough);
-    return dispatch_one(session, command, inv.global, inv.passthrough);
+
+    // `doctor` is the one command the core contributes data to; see
+    // doctor_injection() for why that is not a violation of §3.1.
+    const std::map<std::string, kap::kpl::Value> injected =
+        command == "doctor" ? doctor_injection(session) : std::map<std::string, kap::kpl::Value>{};
+
+    return dispatch_one(session, command, inv.global, inv.passthrough, injected);
 }
 
 // --- the plugin manager CLI (design doc §6.1, Milestone 7) ---------------------------

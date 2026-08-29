@@ -1,0 +1,8 @@
+{
+  "fixture": "any-project",
+  "command": "ports",
+  "tools": ["netstat"],
+  "steps": [
+    { "cmd": ["netstat", "-t", "-l", "-n", "-p"] }
+  ]
+}

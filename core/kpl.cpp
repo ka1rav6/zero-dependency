@@ -1048,6 +1048,41 @@ std::vector<SchemaField> schema(const Plugin& plugin)
     return fields;
 }
 
+Requirements requirements(const Plugin& plugin)
+{
+    Requirements result;
+    if (!plugin.requires_block)
+        return result;
+
+    for (const Statement& statement : plugin.requires_block->statements) {
+        if (statement.kind != Statement::Kind::Directive)
+            continue;
+
+        std::vector<std::string>* target = nullptr;
+        if (statement.name == "any_of")
+            target = &result.required;
+        else if (statement.name == "optional")
+            target = &result.optional;
+        else
+            continue; // an unrecognised directive is not this function's to police
+
+        for (const Expr& argument : statement.expressions) {
+            // §5.5 reads a bare identifier inside a directive list as a string,
+            // which is why `any_of [cmake]` needs no quotes — but a name with a
+            // dash (`golangci-lint`) has to be quoted, so both forms appear.
+            if (argument.kind == Expr::Kind::List) {
+                for (const Expr& item : argument.children) {
+                    if (item.kind == Expr::Kind::String || item.kind == Expr::Kind::Name)
+                        target->push_back(item.token.text);
+                }
+            } else if (argument.kind == Expr::Kind::String || argument.kind == Expr::Kind::Name) {
+                target->push_back(argument.token.text);
+            }
+        }
+    }
+    return result;
+}
+
 std::pair<std::map<std::string, Value>, std::vector<std::string>>
 build_config(const Plugin& plugin, const std::map<std::string, Value>& overrides)
 {

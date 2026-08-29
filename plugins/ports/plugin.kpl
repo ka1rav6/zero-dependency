@@ -1,0 +1,109 @@
+// ports — show which local ports are listening, and what is holding them.
+//
+// The second bundled system plugin (design doc §6.6, Milestone 9). Like
+// `doctor`, it is written in KPL rather than C++ to prove §4's claim that the
+// DSL reaches system introspection and not only build tools.
+//
+// ## Why this shells out instead of reading /proc/net/tcp
+//
+// Milestone 9 describes ports as "reads /proc/net/tcp (Linux) or lsof fallback
+// via step". The first half cannot be done from KPL, for two independent
+// reasons, and both are features rather than gaps:
+//
+//   1. §7's sandbox canonicalises every path a plugin passes to
+//      `project.read` and refuses anything outside the project root. /proc is
+//      outside every project root. Special-casing it would put a hole in the
+//      one rule that makes plugins safe to install from a git URL.
+//
+//   2. /proc/net/tcp stores addresses and ports as big-endian hex
+//      ("0100007F:1F90"), and KPL has no hex parsing, no integer formatting,
+//      and no bit operations — deliberately (§5.6). A plugin that could decode
+//      it would be a plugin language with a lot more surface to audit.
+//
+// So this takes the second half of that sentence: a step. `ss`, `lsof`, and
+// `netstat` all answer the question directly, and the executor already streams
+// their output straight to your terminal.
+
+manifest {
+  name        = "ports"
+  version     = "1.0.0"
+  api_version = 1
+
+  // A sidecar, like `doctor`: it adds `kap ports` to whatever plugin actually
+  // owns the project, and never competes to own it (§3.3).
+  priority    = 1
+  composable  = true
+  supersedes  = []
+}
+
+detect {
+  // Always matches: "what is listening on this machine" is a question worth
+  // being able to ask from any directory.
+  dir_exists "."
+}
+
+requires {
+  // Any one of the three is enough. `ss` is part of iproute2 and present on
+  // essentially every modern Linux; `lsof` is the portable answer and the one
+  // that works on macOS; `netstat` is the fallback for older systems.
+  any_of   [ss, lsof, netstat]
+  optional []
+}
+
+schema {
+  // `auto` picks whichever of the three is installed, preferring the one that
+  // gives the most useful output.
+  tool: enum { auto, ss, lsof, netstat } = auto
+
+  // Show only listening sockets (the default and the useful case), or every
+  // connection including established ones.
+  listening_only: bool = true
+
+  // Include UDP as well as TCP.
+  udp: bool = false
+
+  // Ask for the owning process. This usually needs root for sockets you do not
+  // own; without it the tools simply omit the process column rather than
+  // failing, so it is on by default.
+  show_process: bool = true
+}
+
+command ports(project, config, extra) {
+  let chosen = match config.tool {
+    auto    => if project.tool("ss") then "ss"
+               else if project.tool("lsof") then "lsof"
+               else "netstat",
+    ss      => "ss",
+    lsof    => "lsof",
+    netstat => "netstat",
+  }
+
+  if chosen == "ss" {
+    // -t TCP, -u UDP, -l listening only, -n numeric (no DNS round-trips),
+    // -p show the owning process.
+    let flags = ["-t"]
+    if config.udp { flags = flags + ["-u"] }
+    if config.listening_only { flags = flags + ["-l"] }
+    flags = flags + ["-n"]
+    if config.show_process { flags = flags + ["-p"] }
+    step ["ss"] + flags + extra
+  } else if chosen == "lsof" {
+    // -nP skips both DNS and /etc/services lookups, which is what makes lsof
+    // fast enough to be worth running interactively.
+    let flags = ["-nP"]
+    if config.udp {
+      flags = flags + ["-i"]
+    } else {
+      flags = flags + ["-iTCP"]
+      if config.listening_only { flags = flags + ["-sTCP:LISTEN"] }
+    }
+    step ["lsof"] + flags + extra
+  } else {
+    let flags = ["-t"]
+    if config.udp { flags = flags + ["-u"] }
+    if config.listening_only { flags = flags + ["-l"] }
+    flags = flags + ["-n"]
+    if config.show_process { flags = flags + ["-p"] }
+    step ["netstat"] + flags + extra
+  }
+}

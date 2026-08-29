@@ -233,7 +233,7 @@ expect_stdout_contains "plugin test reports the cargo-rust build case" \
 
 # Milestone 8: all six first-party ecosystems ship with passing fixture cases,
 # and none of them needs its ecosystem toolchain to be installed.
-for plugin_name in cmake-cpp cargo-rust make-generic node go python-uv; do
+for plugin_name in cmake-cpp cargo-rust make-generic node go python-uv doctor ports; do
     expect_status "plugin test passes for $plugin_name" 0 \
         plugin test "$plugin_name" --root "$repo_root"
     expect_status "plugin doctor passes for $plugin_name" 0 \
@@ -548,6 +548,8 @@ expect_stdout_contains "passthrough arguments reach the build step" "--target in
 # Nothing matches: a clear error, not a crash and not a guess.
 empty_proj="$(mktemp -d)"
 expect_status "a directory no plugin claims exits 1" 1 build --root "$empty_proj"
+expect_stderr_contains "it says nothing owns the directory" "no plugin claims" \
+    build --root "$empty_proj"
 expect_stderr_contains "it says which plugins were considered" "considered:" \
     build --root "$empty_proj"
 rm -rf "$empty_proj"
@@ -558,6 +560,77 @@ expect_stderr_contains "an unknown command lists the project commands" "project 
 
 unset KAP_PLUGIN_PATH
 rm -rf "$proj"
+
+# --- the bundled system plugins (Milestone 9) --------------------------------------
+#
+# `doctor` and `ports` are written entirely in KPL (design doc §4 and §6.6), so
+# what has to be checked here is that the core's half of the arrangement works:
+# it collects every matched plugin's `requires` block, injects it, and the
+# plugin decides the rest.
+
+sys_dir="$(mktemp -d)"
+printf 'cmake_minimum_required(VERSION 3.16)\n' > "$sys_dir/CMakeLists.txt"
+export KAP_PLUGIN_PATH="$repo_root/plugins"
+
+expect_stdout_contains "doctor names the plugins it checked" "plugin   cmake-cpp" \
+    doctor --root "$sys_dir"
+expect_stdout_contains "doctor reports the tools cmake-cpp requires" "cmake" \
+    doctor --root "$sys_dir"
+expect_stdout_contains "doctor marks optional tools as optional" "(optional" \
+    doctor --root "$sys_dir"
+
+# The injection is the whole Milestone-9 mechanism: a tool no plugin could
+# possibly have declared must be reportable purely by setting the config key.
+expect_stdout_contains "an injected required tool that is absent is reported MISSING" \
+    "MISSING  kap-no-such-tool-xyz" \
+    doctor --root "$sys_dir" --set required_tools=kap-no-such-tool-xyz
+expect_status "doctor exits non-zero when a required tool is missing" 1 \
+    doctor --root "$sys_dir" --set required_tools=kap-no-such-tool-xyz
+
+# `any_of` grouping: one installed alternative satisfies the whole group.
+#
+# Written through kap.toml rather than --set, because --set splits a list value
+# on commas — so `--set required_tools=a,b` means two groups of one, not one
+# group of two. A group has to arrive as a single string, which a TOML array
+# element can be and a --set element cannot.
+cat > "$sys_dir/kap.toml" <<'TOML'
+[plugins.doctor]
+required_tools = ["kap-nope,sh"]
+TOML
+expect_stdout_contains "an any_of group is satisfied by one member" "ok       sh" \
+    doctor --root "$sys_dir"
+expect_status "a satisfied any_of group exits 0" 0 doctor --root "$sys_dir"
+
+printf '[plugins.doctor]\nrequired_tools = ["kap-nope,kap-also-nope"]\n' > "$sys_dir/kap.toml"
+expect_stdout_contains "an unsatisfiable group says any one would do" "need any one of these" \
+    doctor --root "$sys_dir"
+expect_status "an unsatisfiable group exits 1" 1 doctor --root "$sys_dir"
+rm -f "$sys_dir/kap.toml"
+
+# ports resolves to a real command and shows it under --dry-run without running.
+expect_status "ports --dry-run exits 0" 0 ports -n --root "$sys_dir"
+ports_dry="$("$kap_bin" ports -n --root "$sys_dir" 2>/dev/null)"
+case "$ports_dry" in
+    *ss*|*lsof*|*netstat*) pass "ports resolves to one of ss, lsof, or netstat" ;;
+    *) fail "ports resolves to one of ss, lsof, or netstat" "got: $ports_dry" ;;
+esac
+expect_stdout_contains "ports honours an explicit tool choice" "lsof" \
+    ports -n --root "$sys_dir" --set tool=lsof
+expect_stdout_contains "ports honours its flags" "-u" \
+    ports -n --root "$sys_dir" --set tool=ss --set udp=true
+
+# The sidecars claim every directory, so a directory with no *owner* must still
+# say so rather than complaining about a missing command.
+sidecar_only="$(mktemp -d)"
+expect_status "a directory only sidecars claim still fails a build" 1 \
+    build --root "$sidecar_only"
+expect_stderr_contains "and explains that nothing owns it" "no plugin claims" \
+    build --root "$sidecar_only"
+expect_status "but doctor still works there" 0 doctor --root "$sidecar_only"
+rm -rf "$sidecar_only"
+
+unset KAP_PLUGIN_PATH
+rm -rf "$sys_dir"
 
 # --- the plugin manager (Milestone 7) ---------------------------------------------
 #

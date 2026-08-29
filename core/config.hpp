@@ -113,10 +113,21 @@ struct PluginConfig
     std::vector<std::string>          errors;
 };
 
-PluginConfig for_plugin(const kpl::Plugin&              plugin,
-                        const std::string&              plugin_name,
-                        const Merged&                   merged,
-                        const std::vector<std::string>& set_values);
+// `injected` are values the *core* supplies for this plugin — today only the
+// bundled `doctor` plugin has any (design doc §4 and Milestone 9). They sit at
+// the bottom of the chain, just above the schema defaults, so §5.12's "later
+// wins" rule holds with no exception: both config files and `--set` override
+// them, which is what makes the field experimentable and testable.
+//
+// Only keys the plugin's schema actually declares are injected. A plugin that
+// defines `doctor` without declaring `required_tools` is not asking for the
+// injection, and adding a field its type checker never saw would be a hole in
+// §5.7's promise that `config` matches the schema.
+PluginConfig for_plugin(const kpl::Plugin&                       plugin,
+                        const std::string&                       plugin_name,
+                        const Merged&                            merged,
+                        const std::vector<std::string>&          set_values,
+                        const std::map<std::string, kpl::Value>& injected = {});
 
 // Write one dotted key into a TOML file, creating it (and any intermediate
 // tables) if needed — `kap config set`. The value is stored as a string unless

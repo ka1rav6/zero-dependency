@@ -276,10 +276,11 @@ toml::Value effective(const Merged& merged)
     return combined;
 }
 
-PluginConfig for_plugin(const kpl::Plugin&              plugin,
-                        const std::string&              plugin_name,
-                        const Merged&                   merged,
-                        const std::vector<std::string>& set_values)
+PluginConfig for_plugin(const kpl::Plugin&                       plugin,
+                        const std::string&                       plugin_name,
+                        const Merged&                            merged,
+                        const std::vector<std::string>&          set_values,
+                        const std::map<std::string, kpl::Value>& injected)
 {
     PluginConfig result;
 
@@ -291,8 +292,27 @@ PluginConfig for_plugin(const kpl::Plugin&              plugin,
         return nullptr;
     };
 
-    // Layers in order, so the project file overrides the global one.
     std::map<std::string, kpl::Value> overrides;
+
+    // Core-supplied values sit at the *bottom* of the chain, just above the
+    // schema defaults, so §5.12's "later wins" holds without an exception:
+    // config files and --set both override them.
+    //
+    // The alternative — placing them above the config files, so a project could
+    // not understate what `kap doctor` checks — buys nothing real. A committed
+    // kap.toml is already trusted to run arbitrary shell through §5.13's hooks,
+    // so a project that wanted to weaken its own doctor has easier ways. What
+    // the strict ordering did cost was predictability and testability: a field
+    // no layer could override is a field nobody can experiment with.
+    //
+    // Keys the schema does not declare are dropped rather than reported: a
+    // plugin that did not ask for the injection is not misconfigured.
+    for (const auto& [key, value] : injected) {
+        if (find_field(key) != nullptr)
+            overrides[key] = value;
+    }
+
+    // Then the layers in order, so the project file overrides the global one.
     for (const Layer& layer : merged.layers) {
         const toml::Value* section = lookup(layer.table, {"plugins", plugin_name});
         if (section == nullptr)

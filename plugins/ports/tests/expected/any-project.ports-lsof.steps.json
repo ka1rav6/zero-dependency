@@ -1,0 +1,8 @@
+{
+  "fixture": "any-project",
+  "command": "ports",
+  "tools": ["lsof", "netstat"],
+  "steps": [
+    { "cmd": ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"] }
+  ]
+}

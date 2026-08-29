@@ -1,0 +1,17 @@
+{
+  "command": "doctor",
+  "config": {
+    "matched_plugins": ["cmake-cpp"],
+    "required_tools": ["cmake"],
+    "optional_tools": ["ninja", "ccache"]
+  },
+  "tools": ["cmake", "ninja"],
+  "steps": [
+    { "cmd": ["echo", "kap doctor"] },
+    { "cmd": ["echo", "  plugin   cmake-cpp"] },
+    { "cmd": ["echo", "  ok       cmake"] },
+    { "cmd": ["echo", "  ok       ninja  (optional)"] },
+    { "cmd": ["echo", "  --       ccache  (optional, not installed)"] },
+    { "cmd": ["echo", "healthy"] }
+  ]
+}

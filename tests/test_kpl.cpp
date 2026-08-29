@@ -1152,3 +1152,87 @@ command build(project, config, extra) {
     KAP_ASSERT(errors.empty());
     KAP_ASSERT(kap::kpl::type_check(plugin).empty());
 });
+
+// --- `requires` extraction (Milestone 9) ---------------------------------------------
+//
+// `kap doctor` ships as a KPL plugin (§4), but KPL cannot see other plugins —
+// so the core reads their `requires` blocks and injects the result. This is
+// that reader.
+
+KAP_TEST("requirements reads any_of and optional as bare words")
+{
+    const kap::kpl::Plugin       plugin = kap::kpl::parse(R"(
+manifest { name = "cmake-cpp" version = "1.0.0" api_version = 1 }
+requires {
+  any_of   [cmake]
+  optional [ninja, make, ccache]
+}
+)");
+    const kap::kpl::Requirements needs  = kap::kpl::requirements(plugin);
+    KAP_ASSERT_EQ(needs.required.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(needs.required.front(), std::string("cmake"));
+    KAP_ASSERT_EQ(needs.optional.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(needs.optional[2], std::string("ccache"));
+});
+
+KAP_TEST("requirements accepts quoted names, which a dashed tool needs")
+{
+    // `golangci-lint` cannot be a bare identifier, so both spellings appear in
+    // real plugins and both have to work.
+    const kap::kpl::Plugin       plugin = kap::kpl::parse(R"(
+manifest { name = "go" version = "1.0.0" api_version = 1 }
+requires {
+  any_of   [go]
+  optional [gofumpt, "golangci-lint"]
+}
+)");
+    const kap::kpl::Requirements needs  = kap::kpl::requirements(plugin);
+    KAP_ASSERT_EQ(needs.optional.size(), static_cast<std::size_t>(2));
+    KAP_ASSERT_EQ(needs.optional[1], std::string("golangci-lint"));
+});
+
+KAP_TEST("requirements keeps every member of an any_of group")
+{
+    // The grouping is what makes `any_of [ss, lsof, netstat]` mean "one of
+    // these" rather than "all three". Losing it here would make `kap doctor`
+    // report a healthy machine as missing two tools.
+    const kap::kpl::Plugin       plugin = kap::kpl::parse(R"(
+manifest { name = "ports" version = "1.0.0" api_version = 1 }
+requires {
+  any_of   [ss, lsof, netstat]
+  optional []
+}
+)");
+    const kap::kpl::Requirements needs  = kap::kpl::requirements(plugin);
+    KAP_ASSERT_EQ(needs.required.size(), static_cast<std::size_t>(3));
+    KAP_ASSERT_EQ(needs.required[0], std::string("ss"));
+    KAP_ASSERT_EQ(needs.required[2], std::string("netstat"));
+    KAP_ASSERT(needs.optional.empty());
+});
+
+KAP_TEST("a plugin with no requires block requires nothing")
+{
+    const kap::kpl::Plugin       plugin = kap::kpl::parse(R"(
+manifest { name = "bare" version = "1.0.0" api_version = 1 }
+)");
+    const kap::kpl::Requirements needs  = kap::kpl::requirements(plugin);
+    KAP_ASSERT(needs.required.empty());
+    KAP_ASSERT(needs.optional.empty());
+});
+
+KAP_TEST("an unrecognised requires directive is ignored, not fatal")
+{
+    // The `requires` block is a declaration surface KPL may grow later; a
+    // directive this kap does not know is not a reason to refuse the plugin,
+    // and the api_version gate is what guards against real incompatibility.
+    const kap::kpl::Plugin       plugin = kap::kpl::parse(R"(
+manifest { name = "future" version = "1.0.0" api_version = 1 }
+requires {
+  any_of         [make]
+  recommended    [ccache]
+}
+)");
+    const kap::kpl::Requirements needs  = kap::kpl::requirements(plugin);
+    KAP_ASSERT_EQ(needs.required.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT(needs.optional.empty());
+});

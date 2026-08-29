@@ -1,0 +1,17 @@
+{
+  "fixture": "any-project",
+  "command": "doctor",
+  "config": {
+    "matched_plugins": ["ports"],
+    "required_tools": ["ss,lsof,netstat"],
+    "optional_tools": []
+  },
+  "tools": [],
+  "steps": [
+    { "cmd": ["echo", "kap doctor"] },
+    { "cmd": ["echo", "  plugin   ports"] },
+    { "cmd": ["echo", "  MISSING  ss,lsof,netstat  (need any one of these)"] },
+    { "cmd": ["echo", "unhealthy: install the tools marked MISSING above"] },
+    { "cmd": ["false"] }
+  ]
+}

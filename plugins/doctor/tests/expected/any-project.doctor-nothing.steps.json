@@ -1,0 +1,9 @@
+{
+  "fixture": "any-project",
+  "command": "doctor",
+  "steps": [
+    { "cmd": ["echo", "kap doctor"] },
+    { "cmd": ["echo", "  nothing to check: no matched plugin declares a requires block"] },
+    { "cmd": ["echo", "healthy"] }
+  ]
+}

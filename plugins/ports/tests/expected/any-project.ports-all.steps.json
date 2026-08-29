@@ -1,0 +1,9 @@
+{
+  "fixture": "any-project",
+  "command": "ports",
+  "config": { "tool": "ss", "listening_only": false, "udp": true, "show_process": false },
+  "extra": ["--info"],
+  "steps": [
+    { "cmd": ["ss", "-t", "-u", "-n", "--info"] }
+  ]
+}

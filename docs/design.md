@@ -1336,7 +1336,7 @@ in KPL.
 
 ---
 
-### Milestone 10 — Polish + v1.0
+### Milestone 10 — Polish + v1.0 ⬅ **next**
 **Goal:** Usable by early adopters.
 
 - [ ] `dev` concurrency polish (colored prefixes, `-o` open-first-URL)
