@@ -1,0 +1,4 @@
+{
+  "command": "test",
+  "steps": [ { "cmd": ["mvn", "test"] } ]
+}

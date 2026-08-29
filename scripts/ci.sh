@@ -67,7 +67,7 @@ install_prefix="$(mktemp -d)"
 cmake --install build --prefix "$install_prefix" >/dev/null
 env -i "$install_prefix/bin/kap" --version >/dev/null
 bundled="$(env -i "$install_prefix/bin/kap" plugin list | wc -l | tr -d " ")"
-if [ "$bundled" -lt 9 ]; then
+if [ "$bundled" -lt 10 ]; then
     echo "ci.sh: an installed kap found only $bundled bundled plugins" >&2
     exit 1
 fi
@@ -102,7 +102,7 @@ embed_proj="$(mktemp -d)"
 printf 'cmake_minimum_required(VERSION 3.16)\n' > "$embed_proj/CMakeLists.txt"
 embedded_plugins="$(env -i HOME="$embed_home" PATH="$PATH" \
     "$embed_build/kap" plugin list --root "$embed_proj" | wc -l | tr -d " ")"
-if [ "$embedded_plugins" -lt 9 ]; then
+if [ "$embedded_plugins" -lt 10 ]; then
     echo "ci.sh: an embedded kap found only $embedded_plugins plugins" >&2
     exit 1
 fi

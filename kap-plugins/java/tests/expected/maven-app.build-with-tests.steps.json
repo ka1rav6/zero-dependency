@@ -1,0 +1,5 @@
+{
+  "command": "build",
+  "config": { "skip_tests": false },
+  "steps": [ { "cmd": ["mvn", "package"] } ]
+}

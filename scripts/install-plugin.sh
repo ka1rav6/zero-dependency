@@ -42,7 +42,7 @@ REF="${KAP_PLUGIN_REF:-main}"
 
 # Every first-party plugin. Keep in step with kap-plugins/ and registry/index.toml;
 # scripts/ci.sh checks that this list and the directory agree.
-ALL_PLUGINS="cargo-rust cmake-cpp doctor go make-generic node ports python-uv zig"
+ALL_PLUGINS="cargo-rust cmake-cpp doctor go java make-generic node ports python-uv zig"
 
 # The files a plugin is made of. Fixtures are deliberately not installed: they
 # exist for plugin authors and CI, and kap never reads them at run time.

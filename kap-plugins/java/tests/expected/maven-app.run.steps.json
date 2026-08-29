@@ -1,0 +1,5 @@
+{
+  "command": "run",
+  "config": { "main_class": "com.example.Main" },
+  "steps": [ { "cmd": ["mvn", "exec:java", "-Dexec.mainClass=com.example.Main"] } ]
+}

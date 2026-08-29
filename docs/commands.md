@@ -623,7 +623,7 @@ kap: error: no plugin claims /home/you/code/backend
       note: python-uv (priority 38)
       note:   ✗ file_exists "uv.lock"
       note:   ✗ file_exists "pyproject.toml"
-      note: considered: cargo-rust cmake-cpp doctor go make-generic node ports python-uv zig
+      note: considered: cargo-rust cmake-cpp doctor go java make-generic node ports python-uv zig
 ```
 
 That middle block is the **near-miss list**: the plugins kap evaluated, the
@@ -1117,7 +1117,7 @@ kap plugin test [<name|path>...]
 Evaluates a plugin's command blocks against fixture project trees and compares
 the resulting command lists with committed golden files.
 
-**Nothing is executed.** That is the point: kap's own CI tests all nine bundled
+**Nothing is executed.** That is the point: kap's own CI tests all ten bundled
 plugins with no cmake, cargo, npm, go, or uv installed anywhere. A case declares
 what `project.tool()` and `project.env()` should report, so a test cannot pass
 on your laptop and fail in CI.

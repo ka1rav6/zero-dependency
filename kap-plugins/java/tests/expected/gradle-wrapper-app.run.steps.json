@@ -1,0 +1,4 @@
+{
+  "command": "run",
+  "steps": [ { "cmd": ["./gradlew", "run"] } ]
+}

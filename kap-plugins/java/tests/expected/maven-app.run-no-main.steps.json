@@ -1,0 +1,5 @@
+{
+  "command": "run",
+  "failure": "set main_class to tell 'kap run' which class to execute: kap run --set main_class=com.example.Main, or [plugins.java] main_class = \"com.example.Main\" in kap.toml",
+  "steps": []
+}

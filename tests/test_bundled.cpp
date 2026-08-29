@@ -54,6 +54,7 @@ KAP_TEST("the compiled-in index parses and names the first-party plugins")
                              "cargo-rust",
                              "node",
                              "go",
+                             "java",
                              "python-uv",
                              "make-generic",
                              "doctor",
@@ -107,6 +108,7 @@ KAP_TEST("an embedded build carries every first-party plugin, with a manifest")
                              "cmake-cpp",
                              "doctor",
                              "go",
+                             "java",
                              "make-generic",
                              "node",
                              "ports",
@@ -116,7 +118,7 @@ KAP_TEST("an embedded build carries every first-party plugin, with a manifest")
             ::kap_test::fail_test(
                 __FILE__, __LINE__, std::string("no embedded plugin named '") + name + "'");
     }
-    KAP_ASSERT_EQ(kap::bundled::plugins().size(), static_cast<std::size_t>(9));
+    KAP_ASSERT_EQ(kap::bundled::plugins().size(), static_cast<std::size_t>(10));
     for (const kap::bundled::Plugin& plugin : kap::bundled::plugins()) {
         bool has_manifest = false;
         for (const kap::bundled::File& file : plugin.files) {

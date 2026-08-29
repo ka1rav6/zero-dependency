@@ -1,0 +1,4 @@
+{
+  "command": "check",
+  "steps": [ { "cmd": ["mvn", "compile"] } ]
+}

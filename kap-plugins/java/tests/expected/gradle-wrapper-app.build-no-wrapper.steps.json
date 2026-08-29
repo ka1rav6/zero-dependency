@@ -1,0 +1,5 @@
+{
+  "command": "build",
+  "config": { "wrapper": false },
+  "steps": [ { "cmd": ["gradle", "assemble"] } ]
+}

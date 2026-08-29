@@ -92,6 +92,15 @@ ref = "main"
 subdir = "kap-plugins/go"
 tags = ["go", "golang", "gofmt"]
 
+[plugins.java]
+description = "Maven and Gradle projects, wrapper-aware"
+version = "1.0.0"
+install_script = "https://raw.githubusercontent.com/ka1rav6/zero-dependency/main/scripts/install-plugin.sh"
+url = "https://github.com/ka1rav6/zero-dependency"
+ref = "main"
+subdir = "kap-plugins/java"
+tags = ["java", "maven", "gradle", "jvm", "kotlin"]
+
 [plugins.zig]
 description = "Build, test, run, and format Zig projects"
 version = "1.0.0"

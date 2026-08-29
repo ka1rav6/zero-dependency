@@ -1,0 +1,212 @@
+// java — Maven and Gradle projects.
+//
+// Java has two build tools with no lockfile to arbitrate between them, so this
+// plugin decides the way a person would: a `pom.xml` means Maven, a
+// `build.gradle` means Gradle, and a repository holding both is pinned in
+// kap.toml rather than guessed at.
+//
+// ## The wrapper comes first
+//
+// `./mvnw` and `./gradlew` exist because the version of the build tool is part
+// of the project, not part of the machine. Running the system `gradle` against
+// a project that ships `gradlew` is how you get an error that has nothing to do
+// with your code — so when a wrapper is present, it wins. That also means a
+// project can build on a machine with no gradle installed at all, which is why
+// `requires` asks only for a JDK.
+
+manifest {
+  name        = "java"
+  version     = "1.0.0"
+  api_version = 1
+  priority    = 36
+  composable  = false
+  supersedes  = []
+}
+
+detect {
+  file_exists "pom.xml"
+  file_exists "build.gradle"
+  file_exists "build.gradle.kts"
+  file_exists "settings.gradle"
+  file_exists "settings.gradle.kts"
+}
+
+// A JDK is the real requirement. Maven and Gradle are optional here because
+// the wrapper scripts download the build tool themselves, so a project can be
+// perfectly healthy with neither on PATH.
+requires {
+  any_of   [java]
+  optional [mvn, gradle, javac]
+}
+
+schema {
+  // `auto` prefers Maven when a pom.xml is present, because a pom is a
+  // definite statement where a stray build.gradle may be a leftover.
+  tool: enum { auto, maven, gradle } = auto
+
+  // Use ./mvnw or ./gradlew when the project ships one. Turn this off to force
+  // the system tool — useful when the wrapper itself is what you are debugging.
+  wrapper: bool = true
+
+  // `kap run` needs an entry point and Maven cannot infer one. Gradle projects
+  // using the `application` plugin do not need this.
+  main_class: str = ""
+
+  // `kap build` compiles and packages. Running the tests as part of that is
+  // Maven's default and almost never what you want from a command called
+  // "build" — `kap test` is right there.
+  skip_tests: bool = true
+
+  // Extra arguments appended to every invocation, e.g. ["-o"] for offline.
+  build_args: list<str> = []
+
+  // Formatting and linting have no standard in Java; these name the goal or
+  // task your project actually defines. The defaults follow Spotless and
+  // Checkstyle, which are the most common choices.
+  maven_fmt_goal:       str = "spotless:apply"
+  maven_fmt_check_goal: str = "spotless:check"
+  maven_lint_goal:      str = "checkstyle:check"
+  gradle_fmt_task:       str = "spotlessApply"
+  gradle_fmt_check_task: str = "spotlessCheck"
+  gradle_lint_task:      str = "check"
+
+  // `kap fmt --set check=true` verifies instead of rewriting, for CI.
+  check: bool = false
+}
+
+command build(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    let cmd = [launcher, "package"]
+    if config.skip_tests { cmd = cmd + ["-DskipTests"] }
+    step cmd + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    // `assemble` is Gradle's own "build without running the tests"; using
+    // `build -x test` would mean the same thing in more words.
+    step [launcher, "assemble"] + config.build_args + extra
+  }
+}
+
+command test(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, "test"] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    step [launcher, "test"] + config.build_args + extra
+  }
+}
+
+command check(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  // Compile only: the cheapest pass that catches a type error, with no jar
+  // written and no tests run.
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, "compile"] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    step [launcher, "compileJava"] + config.build_args + extra
+  }
+}
+
+command run(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    // Maven has no notion of "the" main class, and exec:java without one fails
+    // deep inside the plugin with a message about a missing parameter.
+    if config.main_class == "" {
+      fail "set main_class to tell 'kap run' which class to execute: kap run --set main_class=com.example.Main, or [plugins.java] main_class = \"com.example.Main\" in kap.toml"
+    }
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, "exec:java", "-Dexec.mainClass=" + config.main_class] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    // Gradle's `application` plugin defines `run` and knows its own mainClass.
+    step [launcher, "run"] + config.build_args + extra
+  }
+}
+
+command fmt(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    let goal = if config.check then config.maven_fmt_check_goal else config.maven_fmt_goal
+    step [launcher, goal] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    let task = if config.check then config.gradle_fmt_check_task else config.gradle_fmt_task
+    step [launcher, task] + config.build_args + extra
+  }
+}
+
+command lint(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, config.maven_lint_goal] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    step [launcher, config.gradle_lint_task] + config.build_args + extra
+  }
+}
+
+command install(project, config, extra) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, "install"] + config.build_args + extra
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    step [launcher, "publishToMavenLocal"] + config.build_args + extra
+  }
+}
+
+command clean(project, config) {
+  let tool = match config.tool {
+    auto   => if project.exists("pom.xml") then "maven" else "gradle",
+    maven  => "maven",
+    gradle => "gradle",
+  }
+  // The build tool's own clean, rather than `rm -rf target`: it knows what it
+  // wrote, including anything a plugin configured elsewhere.
+  if tool == "maven" {
+    let launcher = if config.wrapper && project.exists("mvnw") then "./mvnw" else "mvn"
+    step [launcher, "clean"]
+  } else {
+    let launcher = if config.wrapper && project.exists("gradlew") then "./gradlew" else "gradle"
+    step [launcher, "clean"]
+  }
+  report_freed_space
+}

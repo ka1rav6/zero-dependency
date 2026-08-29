@@ -1,0 +1,5 @@
+{
+  "command": "clean",
+  "report_freed_space": true,
+  "steps": [ { "cmd": ["./gradlew", "clean"] } ]
+}
