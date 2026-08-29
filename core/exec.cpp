@@ -539,6 +539,24 @@ Outcome run(const kpl::CommandSpec& spec, const Options& options)
 {
     Outcome outcome;
 
+    // A `fail` statement means the plugin looked at this project and concluded
+    // there is nothing runnable to do. It is checked before everything else —
+    // including the dry-run path and the empty-steps shortcut — because the
+    // message is the whole result, and because any steps accumulated before
+    // the `fail` were never going to run.
+    if (spec.failure.has_value()) {
+        std::ostream& err = err_stream(options);
+        err << "kap: error: " << *spec.failure << "\n";
+        if (options.dry_run && !spec.steps.empty()) {
+            err << "      note: the plan stopped here; it would have run:\n";
+            for (const kpl::Step& step : spec.steps)
+                err << "      note:   " << render_step(step, options) << "\n";
+        }
+        err.flush();
+        outcome.exit_code = 1;
+        return outcome;
+    }
+
     if (spec.steps.empty())
         return outcome;
 

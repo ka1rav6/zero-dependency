@@ -320,6 +320,7 @@ for name in list_expr { ... }
 match expr { ... }              // in statement position, the value is discarded
 concurrent true
 report_freed_space
+fail expr                       // stop the command and tell the user why
 ```
 
 `for` iterates lists only — there is no numeric range form. The lists it can
@@ -407,6 +408,51 @@ back to measuring the whole project root.
 
 ---
 
+## `fail`
+
+```kpl
+fail "package.json declares no \"build\" script"
+```
+
+`fail` ends the command. Nothing after it runs, at any nesting depth, and the
+executor prints the message as `kap: error: <message>` and exits non-zero
+without spawning a single process. Steps accumulated before the `fail` are kept
+in the spec so `--dry-run` can show how far the plan got, but they are never
+executed.
+
+The operand must be a `str`, checked at load time. Nothing is coerced: a
+non-string message is a plugin bug, and stringifying it would put the
+interpreter's idea of a value in front of a user who cannot act on it.
+
+Use it when the plugin can tell, from the project itself, that the command it
+is about to build cannot possibly work — a missing npm script, a config field
+that has to be set and is not. This is the difference between:
+
+```
+npm error Missing script: "start"
+npm error Did you mean one of these?
+```
+
+and
+
+```
+kap: error: package.json declares no "start" script, which is what 'kap run'
+runs; this project has a "dev" script — try 'kap dev'
+```
+
+Both are true. Only the second one knows it was `kap run` that picked the name
+`start`, that `start_script` in kap.toml can change it, and that a sibling kap
+command already does what the user wanted.
+
+`fail` is **not** the channel for a broken plugin. A malformed `step`, an
+unknown identifier, or a type error is a `diag::Error` addressed to the plugin's
+*author*, and carries a source location. A `fail` is the plugin working
+correctly and saying something true about the project it was pointed at, so it
+carries no location: `plugin.kpl:127` in front of someone whose actual problem
+is a missing npm script is noise.
+
+---
+
 ## Builtins
 
 ### `project`
@@ -454,7 +500,20 @@ A command block returns nothing explicitly. It accumulates steps, and kap builds
     }
   ],
   "concurrent": false,
-  "report_freed_space": false
+  "report_freed_space": false,
+  "failure": null
+}
+```
+
+`failure` is null unless a `fail` statement ran, in which case it holds the
+message and `steps` holds whatever the command had accumulated before stopping.
+A golden file asserts one like any other field:
+
+```json
+{
+  "command": "run",
+  "failure": "package.json declares no \"start\" script, which is what 'kap run' runs",
+  "steps": []
 }
 ```
 
@@ -554,7 +613,7 @@ command_decl   = "command" IDENT "(" param_list ")" block ;
 block       = "{" { stmt } "}" ;
 
 stmt        = let_stmt | assign_stmt | step_stmt | if_stmt | for_stmt
-            | match_stmt | concurrent_stmt | report_stmt ;
+            | match_stmt | concurrent_stmt | report_stmt | fail_stmt ;
 
 let_stmt    = "let" IDENT "=" expr ;
 step_stmt   = "step" step_arg { step_arg } | "step" expr ;
@@ -572,6 +631,7 @@ assign_stmt = IDENT "=" expr ;
 
 concurrent_stmt = "concurrent" BOOL ;
 report_stmt     = "report_freed_space" ;
+fail_stmt       = "fail" expr ;
 
 step_arg    = STRING | expr ;
 

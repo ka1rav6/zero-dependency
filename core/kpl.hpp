@@ -106,7 +106,18 @@ struct Statement
         // its arguments, e.g. `file_exists "CMakeLists.txt"` or
         // `optional [ninja, make]`. `name` holds the directive; `expressions`
         // holds the arguments.
-        Directive
+        Directive,
+        // `fail <expr>` — stop the command and report `expr` to the *user*.
+        // Distinct from a diag::Error, which reports a broken plugin to its
+        // *author*: a `fail` is the plugin working correctly and saying
+        // something true about the project it was pointed at.
+        //
+        // Appended rather than slotted in beside the other modifiers: this
+        // enum is serialised **by value** into the AST cache (core/kapc.hpp),
+        // so inserting a member renumbers every one after it and silently
+        // reinterprets every cache entry written by an older kap. New kinds go
+        // at the end, and kFormatVersion is bumped besides.
+        Fail
     };
     Kind                     kind = Kind::Expression;
     Token                    token;
@@ -216,6 +227,12 @@ struct CommandSpec
     std::vector<Step> steps;
     bool              concurrent         = false;
     bool              report_freed_space = false;
+
+    // Set by a `fail` statement (§5.5). When present the command produced no
+    // runnable plan and this is the reason; the executor prints it and stops
+    // without spawning anything. Steps accumulated before the `fail` are kept
+    // for `--dry-run` to show, but are never run.
+    std::optional<std::string> failure;
 };
 
 struct SchemaField

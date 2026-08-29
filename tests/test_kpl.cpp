@@ -177,6 +177,62 @@ KAP_TEST("KPL evaluator applies concurrent and freed-space modifiers")
     KAP_ASSERT_EQ(spec.steps[0].command[2], std::string("build"));
 });
 
+KAP_TEST("KPL fail stops the command and records the reason")
+{
+    const auto plugin =
+        kap::kpl::parse("command build(project, config) { step \"first\" fail \"nothing to build\""
+                        " step \"unreachable\" }");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(plugin, "build", project);
+
+    KAP_ASSERT(spec.failure.has_value());
+    KAP_ASSERT_EQ(*spec.failure, std::string("nothing to build"));
+    // Steps before the fail are kept for --dry-run; the one after it never ran.
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("first"));
+});
+
+KAP_TEST("KPL fail unwinds out of nested blocks")
+{
+    const auto plugin = kap::kpl::parse(
+        "command build(project, config) { for name in config.names { if name == \"stop\""
+        " { fail \"stopped at \" + name } step name } }");
+    const kap::kpl::Project project{};
+    const auto              spec = kap::kpl::evaluate(
+        plugin,
+        "build",
+        project,
+        {{"names",
+                       kap::kpl::Value::list_value({kap::kpl::Value::string_value("go"),
+                                                    kap::kpl::Value::string_value("stop"),
+                                                    kap::kpl::Value::string_value("never")})}});
+
+    KAP_ASSERT(spec.failure.has_value());
+    KAP_ASSERT_EQ(*spec.failure, std::string("stopped at stop"));
+    KAP_ASSERT_EQ(spec.steps.size(), static_cast<std::size_t>(1));
+    KAP_ASSERT_EQ(spec.steps[0].command[0], std::string("go"));
+});
+
+KAP_TEST("KPL fail requires a string message")
+{
+    const auto plugin = kap::kpl::parse("command build(project, config) { fail 42 }");
+    const auto errors = kap::kpl::type_check(plugin);
+    KAP_ASSERT(!errors.empty());
+});
+
+KAP_TEST("KPL failure round-trips through the CommandSpec JSON contract")
+{
+    kap::kpl::CommandSpec spec;
+    spec.failure        = "no 'build' script";
+    const auto restored = kap::kpl::spec_from_json(kap::kpl::to_json(spec), "test");
+    KAP_ASSERT(restored.failure.has_value());
+    KAP_ASSERT_EQ(*restored.failure, std::string("no 'build' script"));
+
+    // Absent means absent, not an empty message.
+    kap::kpl::CommandSpec plain;
+    KAP_ASSERT(!kap::kpl::spec_from_json(kap::kpl::to_json(plain), "test").failure.has_value());
+});
+
 KAP_TEST("KPL schema builds typed defaults and accepts overrides")
 {
     const auto plugin =

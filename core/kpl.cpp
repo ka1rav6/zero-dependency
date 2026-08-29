@@ -575,6 +575,13 @@ private:
             result.token = tokens_[position_ - 1];
             return result;
         }
+        if (match_text("fail")) {
+            Statement result;
+            result.kind  = Statement::Kind::Fail;
+            result.token = tokens_[position_ - 1];
+            result.expressions.push_back(expression());
+            return result;
+        }
 
         if (check(TokenKind::Identifier) && peek(1).kind == TokenKind::Equal) {
             Statement result;
@@ -650,7 +657,8 @@ private:
     {
         return check_text("let") || check_text("step") || check_text("if") || check_text("for") ||
                check_text("match") || check_text("concurrent") ||
-               check_text("report_freed_space") || check(TokenKind::RightBrace);
+               check_text("report_freed_space") || check_text("fail") ||
+               check(TokenKind::RightBrace);
     }
 
     Expr conditional()
@@ -1570,6 +1578,12 @@ private:
             error("condition must be a boolean, got " + std::string(type_name(type)), token);
     }
 
+    void require_string(StaticType type, const Token& token)
+    {
+        if (type != StaticType::String && type != StaticType::Unknown)
+            error("fail message must be a string, got " + std::string(type_name(type)), token);
+    }
+
     // One signature table, shared by the checker and mirrored by the
     // interpreter's dispatch. `Unknown` as a return type means "the lattice
     // cannot express it" — `project.env` returns `str?`, which is a string or
@@ -1799,6 +1813,12 @@ private:
             case Statement::Kind::Concurrent:
                 require_boolean(expression(statement.expressions.front()), statement.token);
                 return;
+            case Statement::Kind::Fail:
+                // A message that is not a string would reach the user as
+                // whatever the interpreter happened to stringify, so this is
+                // worth catching at load time like any other type error.
+                require_string(expression(statement.expressions.front()), statement.token);
+                return;
             case Statement::Kind::ReportFreedSpace:
             case Statement::Kind::Expression:
                 for (const Expr& expr : statement.expressions)
@@ -1853,6 +1873,12 @@ public:
         });
     }
 
+    // Thrown by a `fail` statement to unwind out of arbitrarily nested `if`
+    // and `for` bodies. Private and caught in run(), so it never escapes the
+    // interpreter as an exception the rest of kap has to know about.
+    struct Failed
+    {};
+
     CommandSpec run(const Command& command)
     {
         // Bind exactly the parameters the command declares — no more.
@@ -1870,8 +1896,14 @@ public:
                      command.token);
             environment_[parameter] = argument->second;
         }
-        for (const Statement& statement : command.body.statements)
-            statement_run(statement);
+        try {
+            for (const Statement& statement : command.body.statements)
+                statement_run(statement);
+        }
+        catch (const Failed&) {
+            // spec_.failure is already set; the partial step list is kept so
+            // `--dry-run` can show how far the plan got.
+        }
         return spec_;
     }
 
@@ -1967,6 +1999,17 @@ private:
                 }
         }
         return false;
+    }
+
+    // The operand of a `fail`. Nothing is coerced, for the same reason argv
+    // words are not: a non-string here is a plugin bug, and stringifying it
+    // would put the interpreter's idea of the value in front of a user who
+    // cannot act on it.
+    const std::string& fail_message(const Value& value, const Token& token) const
+    {
+        if (value.kind != Value::Kind::String)
+            fail("fail message must be a string, got " + std::string(kind_name(value.kind)), token);
+        return value.string;
     }
 
     // One word of an argv array. Steps are argv arrays of strings, never a
@@ -2479,6 +2522,13 @@ private:
             case Statement::Kind::ReportFreedSpace:
                 spec_.report_freed_space = true;
                 return;
+            case Statement::Kind::Fail:
+                // Record the reason and unwind: everything after a `fail` is
+                // by definition unreachable, and continuing would append steps
+                // to a plan that is never going to run.
+                spec_.failure = fail_message(expression(statement.expressions.front()),
+                                             statement.expressions.front().token);
+                throw Failed{};
             case Statement::Kind::For:
                 for_run(statement);
                 return;
@@ -2691,6 +2741,7 @@ json::Value to_json(const CommandSpec& spec)
         {"steps", json::make_array(std::move(steps))},
         {"concurrent", json::make_boolean(spec.concurrent)},
         {"report_freed_space", json::make_boolean(spec.report_freed_space)},
+        {"failure", spec.failure ? json::make_string(*spec.failure) : json::make_null()},
     });
 }
 
@@ -2727,6 +2778,10 @@ CommandSpec spec_from_json(const json::Value& value, const std::string& source_n
     CommandSpec spec;
     spec.concurrent         = optional_boolean(value, "concurrent", false, source_name);
     spec.report_freed_space = optional_boolean(value, "report_freed_space", false, source_name);
+    if (const json::Value* failure = value.find("failure");
+        failure != nullptr && failure->kind == json::Value::Kind::String) {
+        spec.failure = failure->string;
+    }
 
     const json::Value* steps = value.find("steps");
     if (steps == nullptr)

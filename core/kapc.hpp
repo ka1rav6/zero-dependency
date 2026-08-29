@@ -56,7 +56,9 @@ namespace kapc
 // Bump this whenever the encoding or the AST's shape changes. Every existing
 // cache entry is then treated as stale, which is exactly right: an entry
 // written by a different kap cannot be trusted to decode into the same tree.
-inline constexpr std::uint32_t kFormatVersion = 1;
+// 2: added Statement::Kind::Fail. Statement kinds are written as integers, so
+//    any change to the enum's membership invalidates every existing entry.
+inline constexpr std::uint32_t kFormatVersion = 2;
 
 // Encode a parsed plugin. Deterministic: the same AST always produces the same
 // bytes, which is what makes the round-trip testable.
