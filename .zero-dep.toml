@@ -1,0 +1,33 @@
+# .zero-dep.toml — Zero Dependency hackathon submission metadata.
+
+track = "A"
+pitch = "A zero-config CLI that detects your project type and runs the right build tool, with all ecosystem knowledge in a plugin language the binary interprets rather than compiled in."
+
+name     = "kap"
+tagline  = "know project, act"
+language = "C++20"
+license  = "MIT"
+
+# Track A is "Developer Tools & CLI - a linter, formatter, task runner, git
+# helper, or file utility, the kind of tool most people reach for a dozen
+# packages to build." kap is a task runner, and the dozen packages it did not
+# reach for are enumerated in STDLIB.md.
+
+[build]
+command  = "make"
+artifact = "build/kap"
+
+[dependencies]
+runtime = []
+build   = ["cmake", "a C++20 compiler"]   # dev tools, never linked
+test    = []                              # in-tree harness, no framework
+
+[proof]
+file    = "deps-proof.txt"
+command = "make deps-proof"
+
+[bonus]
+package_killer = true   # TOML, JSON, SHA-256, arg parsing, a test harness, a language
+stdlib_log     = true   # 16 substitutions with rationale in STDLIB.md
+single_file    = false
+reproducible   = false

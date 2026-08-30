@@ -129,6 +129,7 @@ echo "== scripts ========================================================"
 # class of mistake that matters most for a script people pipe into a shell.
 sh -n scripts/install.sh
 sh -n scripts/install-plugin.sh
+sh -n scripts/deps-proof.sh
 bash -n scripts/ci-full.sh
 
 # install-plugin.sh carries its own list of the first-party plugins, and a

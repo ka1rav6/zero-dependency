@@ -10,6 +10,8 @@ $ cd some-monorepo      && kap dev        # every workspace at once, output labe
 
 Built in 72 hours for the **Zero Dependency** hackathon. **Track A — Developer Tools & CLI.**
 
+> **For judges:** [`STDLIB.md`](STDLIB.md) is the sixteen stdlib-for-package substitutions and the full disclosure of every external program kap runs. [`deps-proof.txt`](deps-proof.txt) is the generated evidence — `make deps-proof` reproduces it on your machine. `make` builds everything in one command.
+
 ---
 
 ## Two claims, both of them negative
@@ -52,8 +54,6 @@ $ kap build                                        # works again
 
 Take the text files away and kap can do nothing at all. That is not a layering nicety — it is the difference between a tool that supports six ecosystems and a tool that supports any ecosystem someone will spend two minutes describing.
 
-That is not a layering nicety. It is the difference between a tool that supports six ecosystems and a tool that supports any ecosystem someone is willing to spend two minutes describing.
-
 ---
 
 ## Try it in ninety seconds
@@ -61,9 +61,14 @@ That is not a layering nicety. It is the difference between a tool that supports
 Everything below runs **without cmake, cargo, npm, Go, Java, or Zig installed.** That is not a demo trick — `kap build -n` is complete rather than best-effort, because plugins only *declare* steps and the executor is the only thing in the codebase that can start a process.
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-cmake --install build --prefix ~/.local
+make                  # configure + build, leaves ./build/kap
+make install          # binary, ten plugins, registry index -> ~/.local
+```
+
+`make help` lists every target. CMake directly works too, if you prefer:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build
 ```
 
 ```console
@@ -92,7 +97,7 @@ $ kap doctor                  # do I have the tools this project needs
 For a **single self-contained binary** that carries all ten plugins and needs no files beside it and no network:
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKAP_EMBED_PLUGINS=ON
+make embed
 ```
 
 ---
@@ -262,6 +267,8 @@ Everything in `docs/`, and it is worth a look — the design is documented as th
 | **[docs/dockerusage.md](docs/dockerusage.md)** | The pinned dev container |
 | **[howto.md](howto.md)** | Contributor guide: what every module does |
 | **[AGENTS.md](AGENTS.md)** | The rules every change in this repo follows |
+| **[STDLIB.md](STDLIB.md)** | Every stdlib-for-package substitution, and what each cost |
+| **[deps-proof.txt](deps-proof.txt)** | Generated dependency evidence — `make deps-proof` |
 
 ---
 
