@@ -748,8 +748,12 @@ namespace
 // report where inside it the plugin lives.
 struct Staged
 {
-    bool                  ok = false;
-    std::string           error;
+    bool        ok = false;
+    std::string error;
+
+    // Multi-line advice shown under `error`. Separate from the message so a
+    // caller can print it as notes rather than as one long sentence.
+    std::string           hint;
     std::filesystem::path directory; // the plugin directory inside the staging area
     Origin                origin = Origin::Registry;
     std::string           url;
@@ -873,7 +877,38 @@ Staged stage(const InstallRequest&        request,
         return staged;
     }
 
+    // The dead end worth naming precisely.
+    //
+    // index_file() returns the *first* index it finds on disk and only falls
+    // back to the compiled-in one when there is none. install.sh writes
+    // ~/.local/share/kap/registry/index.toml once and nothing ever refreshes
+    // it, so a machine that installed kap before a plugin was published keeps
+    // consulting an index that predates it — while the binary in its hand
+    // carries a newer one it will never read. "cannot resolve 'zig'" is then
+    // true of the stale file and false of everything else, and there is no way
+    // to guess that from the message.
     staged.error = "cannot resolve '" + request.source + "'";
+    if (const std::string_view embedded_text = bundled::registry_index(); !embedded_text.empty()) {
+        try {
+            const Index embedded =
+                parse_index(toml::parse(embedded_text, "<embedded>"), "<embedded>");
+            if (embedded.plugins.count(request.source) != 0) {
+                staged.error += "; this kap knows about '" + request.source +
+                                "' but the registry index on disk predates it";
+                staged.hint = "refresh it, or read the one compiled into this binary:\n"
+                              "    KAP_REGISTRY=<path-to-kap>/registry/index.toml kap plugin "
+                              "install " +
+                              request.source +
+                              "\n"
+                              "    kap plugin install --link <path-to-kap>/kap-plugins/" +
+                              request.source;
+            }
+        }
+        catch (const diag::Error&) {
+            // An unparseable embedded index is not this function's problem to
+            // report; the caller already has a resolution failure to show.
+        }
+    }
     return staged;
 }
 
@@ -917,6 +952,8 @@ InstallResult install(const InstallRequest&                          request,
     cleanup.script      = staged.script;
     if (!staged.ok) {
         result.message = staged.error;
+        if (!staged.hint.empty())
+            result.message += "\n" + staged.hint;
         return result;
     }
 

@@ -262,10 +262,15 @@ void collect_from(const std::filesystem::path& dir, Source source, std::vector<L
         // being reported as broken.
         if (!fs::is_file(located.manifest))
             continue;
-        const bool shadowed = std::any_of(
+        const auto winner = std::find_if(
             found.begin(), found.end(), [&name](const Located& seen) { return seen.name == name; });
-        if (!shadowed)
+        if (winner == found.end()) {
             found.push_back(std::move(located));
+        } else {
+            // Record the loser on the winner rather than dropping it. This is
+            // the only place that knows both copies exist.
+            winner->shadowed.emplace_back(source, located.directory);
+        }
     }
 }
 

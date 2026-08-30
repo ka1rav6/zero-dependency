@@ -105,6 +105,7 @@ std::filesystem::path search_root(const kap::cli::GlobalOptions& global);
 // moved just to satisfy the compiler's reading order.
 void report_no_plugins_anywhere(const std::filesystem::path& root);
 void print_near_misses(const kap::detect::Resolution& resolution);
+void warn_about_shadowed_repository(const std::vector<kap::plugin::Located>& plugins);
 void print_detection_footer(const kap::detect::Resolution&           resolution,
                             const std::vector<kap::plugin::Located>& plugins,
                             bool                                     verbose);
@@ -316,6 +317,7 @@ Session open_session(const kap::cli::GlobalOptions& global)
     session.plugins        = kap::plugin::discover(discovery);
     kap::registry::apply_lockfile(kap::registry::load_lockfile(kap::paths::lockfile()),
                                   session.plugins);
+    warn_about_shadowed_repository(session.plugins);
 
     kap::detect::Options options;
     options.ast_cache   = kap::kapc::cache_directory();
@@ -410,6 +412,36 @@ std::string marker_label(const std::string& description)
     if (close == std::string::npos)
         return description;
     return description.substr(open + 1, close - open - 1);
+}
+
+// Warn when an installed plugin hides a copy in the repository the user is
+// standing in.
+//
+// Shadowing is the tier system working (§6.5) and is silent on purpose. This
+// one case is different: it means someone has kap's own checkout open, is
+// editing a plugin there, and is running a *different* copy. Nothing about the
+// output would ever say so, and the symptom — "I changed the file and nothing
+// happened" — reads as the tool being broken. It cost the author of this
+// function twenty minutes; it would cost a live demo everything.
+void warn_about_shadowed_repository(const std::vector<kap::plugin::Located>& plugins)
+{
+    const kap::style::Palette c = kap::style::for_stderr();
+    for (const kap::plugin::Located& located : plugins) {
+        if (!located.shadows_repository())
+            continue;
+        std::cerr << "  " << c.yellow << "warning" << c.reset << ": using the installed '"
+                  << located.name << "', not the copy in this repository\n";
+        for (const auto& [source, path] : located.shadowed) {
+            if (source != kap::plugin::Source::Repository)
+                continue;
+            std::cerr << "           " << c.dim << "editing   " << path.string() << c.reset
+                      << "\n           " << c.dim << "running   " << located.directory.string()
+                      << c.reset << "\n";
+        }
+        std::cerr << "           " << c.dim
+                  << "kap plugin install --link <path>   to run the checkout instead" << c.reset
+                  << "\n";
+    }
 }
 
 // The bottom half of every "nothing claims this" message: what *did* match,
@@ -1064,9 +1096,18 @@ int run_plugin_list(const kap::cli::GlobalOptions& global, const std::vector<std
             std::cout << "  disabled";
         if (row != lock.plugins.end() && !row->second.pinned.empty())
             std::cout << "  pinned=" << row->second.pinned;
+        if (!located.shadowed.empty())
+            std::cout << "  shadows " << located.shadowed.size()
+                      << (located.shadowed.size() == 1 ? " other copy" : " other copies");
         std::cout << "\n";
         if (global.verbose)
             std::cout << "      " << located.directory.string() << "\n";
+        // Always, not just under --verbose: a name appearing twice is the one
+        // thing in this table that can make an edit look like it did nothing.
+        for (const auto& [source, path] : located.shadowed)
+            std::cout << "      " << kap::style::for_stderr().dim << "hidden ["
+                      << kap::plugin::source_name(source) << "] " << path.string()
+                      << kap::style::for_stderr().reset << "\n";
     }
 
     if (global.verbose) {

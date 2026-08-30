@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kap
@@ -50,6 +51,28 @@ struct Located
     // caller, so `kap plugin list` can show a disabled plugin as disabled
     // instead of pretending it does not exist.
     bool enabled = true;
+
+    // Copies of this same plugin in lower-precedence tiers, in the order they
+    // were found. Shadowing is correct behaviour (§6.5) and usually invisible
+    // on purpose — but *silently* invisible is how someone edits a plugin in a
+    // checkout, sees no change because an installed copy outranks it, and
+    // concludes the tool is broken. Recording the losers lets the caller say
+    // so; `shadowing()` below picks out the one case worth interrupting for.
+    std::vector<std::pair<Source, std::filesystem::path>> shadowed;
+
+    // True when this plugin hides a copy in the *repository* the user is
+    // standing in. That specific collision means "your edits are being
+    // ignored", which is a mistake rather than a configuration, so it is the
+    // only one kap volunteers without being asked.
+    bool shadows_repository() const
+    {
+        for (const auto& [source, path] : shadowed) {
+            (void) path;
+            if (source == Source::Repository)
+                return true;
+        }
+        return false;
+    }
 };
 
 // Which directories `discover()` searches. Every field defaults to the
