@@ -3,6 +3,18 @@
 A plugin teaches kap about one ecosystem. It is a single text file plus a
 README — no C++, no compiler, no rebuild of kap.
 
+**This is the whole point of the project.** kap ships ten ecosystems, but the
+number that matters is how much it costs to add the eleventh: roughly fifteen
+minutes, and nobody's permission. A plugin that maps `build`, `test`, and `run`
+onto three commands is nine lines. `cargo-rust` covers `build`, `test`,
+`check`, `lint`, `fmt`, `run`, `clean`, and `ci` for all of Rust in sixty-four
+lines of actual code; `go` is seventy-four.
+
+Once written, your plugin inherits everything kap already does — `--dry-run`,
+the layered configuration and `--set` overrides, hooks, `kap doctor`, `kap ci`,
+shell completions, and golden-file tests that run without your ecosystem's
+toolchain installed. You describe the recipe; the rest exists already.
+
 This page walks through building one. For the language itself, keyword by
 keyword, see [PLUGIN_API.md](PLUGIN_API.md).
 

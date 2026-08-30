@@ -56,6 +56,36 @@ Take the text files away and kap can do nothing at all. That is not a layering n
 
 ---
 
+## What that buys: a new build system in about fifteen minutes
+
+This is the part that matters most, and it is a direct consequence of the two claims above.
+
+Because no ecosystem is compiled into the binary, teaching kap a build system it has never heard of is **a text file** — not a fork, not a pull request, not a release, not a conversation with a maintainer.
+
+The first-party plugins are the evidence. `cargo-rust` covers `build`, `test`, `check`, `lint`, `fmt`, `run`, `clean`, and `ci` for the entire Rust ecosystem in **64 lines** of actual code. `go` is 74. `zig` is 81. A minimal plugin that maps three verbs onto three commands is under fifteen lines.
+
+```console
+$ kap plugin new bazel           # scaffolds the five blocks and a fixture test
+$ $EDITOR bazel/plugin.kpl       # ~15 minutes: what marks a Bazel project, what each verb runs
+$ kap plugin doctor bazel        # parses, validates, type-checks — before anything runs
+$ kap plugin test bazel          # golden cases, with Bazel not installed
+$ kap plugin install --link bazel
+```
+
+From there `kap build`, `kap test`, `kap dev`, `kap doctor`, `kap ci`, `--dry-run`, config overrides, hooks, and shell completions all work in a Bazel project. You wrote the recipe; the rest was already there.
+
+**Why that scales rather than merely being convenient:**
+
+- **The work is additive, not multiplicative.** Supporting *N* ecosystems across *M* commands is normally *N × M* branches in one codebase, and every new ecosystem risks the others. Here it is *N* independent files that cannot reach each other, cannot see each other, and cannot break each other.
+- **Every plugin is testable without its toolchain.** `kap plugin test` diffs generated step lists against committed golden files, so kap's CI verifies ten ecosystems with no cmake, cargo, npm, Go, Java, or Zig installed. A contributor can write and test a Haskell plugin without installing GHC.
+- **A third-party plugin cannot hurt you.** The sandbox means a plugin you downloaded cannot spawn a process, read outside the project, or reach the network — it can only *describe* steps that kap then shows you with `--dry-run` before running.
+- **Old binaries degrade gracefully.** `api_version` is checked at load time, so a plugin written for a newer KPL is skipped with a warning rather than breaking an unrelated build.
+- **Nobody has to agree with you.** Prefer `mise` over `asdf`, or your company's in-house build wrapper? Write the plugin, `kap plugin install --link`, done. Priorities and `[detect] ecosystem` settle any overlap.
+
+Ten ecosystems ship today. The eleventh is an afternoon's work for someone who has never seen this codebase, and the twelfth does not make the eleventh any harder.
+
+---
+
 ## Try it in ninety seconds
 
 Everything below runs **without cmake, cargo, npm, Go, Java, or Zig installed.** That is not a demo trick — `kap build -n` is complete rather than best-effort, because plugins only *declare* steps and the executor is the only thing in the codebase that can start a process.

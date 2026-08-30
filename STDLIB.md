@@ -181,7 +181,9 @@ Not one package — **the class of them.** A tool like this normally imports a T
 
 kap is 15,397 lines of C++ that links libc and libstdc++, ships a programming language, and is verified by 412 unit tests, 256 end-to-end tests, and 74 plugin golden cases — none of which requires a single ecosystem toolchain to be installed.
 
-The nearest comparison in spirit is `just` or `task`, both of which are excellent and both of which carry substantial dependency trees. The interesting claim is not that kap is smaller. It is that the ecosystem knowledge lives in **1,487 lines of plugin text** rather than in the binary, so adding Elixir support is a file someone writes in two minutes and never a release of kap.
+The nearest comparison in spirit is `just` or `task`, both of which are excellent and both of which carry substantial dependency trees. The interesting claim is not that kap is smaller.
+
+It is that the ecosystem knowledge lives in **1,487 lines of plugin text** rather than in the binary — which is also what makes the zero-dependency constraint pay for itself rather than merely being honoured. A hardcoded tool would need a new release, from its maintainers, to support your build system. kap needs a text file and about fifteen minutes: a working Bazel plugin is nine lines, `cargo-rust` covers all of Rust in sixty-four, and `kap plugin test` verifies either one with Bazel and Cargo both absent. Ten ecosystems ship today, and the eleventh makes none of them harder to maintain, because plugins cannot see or reach each other.
 
 ---
 

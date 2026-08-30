@@ -12,6 +12,15 @@ nothing about any specific ecosystem. It only knows how to detect, dispatch,
 parse KPL, and execute. Everything about "what command builds a CMake
 project" lives in a `.kpl` file that ships as a plugin.
 
+That is not an architectural preference; it is the whole value proposition.
+A tool with hardcoded ecosystem modules grows as *N × M* — every ecosystem
+times every command, all in one codebase, where each addition can break the
+others. kap grows by addition: one independent file per ecosystem, sandboxed
+from every other, testable without that ecosystem's toolchain installed, and
+writable in about fifteen minutes by someone who has never read the C++. The
+measure of this design is not the ten plugins that ship, but that the
+eleventh costs an afternoon and makes none of the first ten harder.
+
 ---
 
 ## 1. Goals & Non-Goals

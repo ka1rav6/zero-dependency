@@ -1,7 +1,7 @@
 # .zero-dep.toml — Zero Dependency hackathon submission metadata.
 
 track = "A"
-pitch = "A zero-config CLI that detects your project type and runs the right build tool, with all ecosystem knowledge in a plugin language the binary interprets rather than compiled in."
+pitch = "A zero-config CLI that detects your project type and runs the right build tool - and because every ecosystem is a text file in a plugin language the binary interprets, teaching it a build system it has never heard of takes fifteen minutes and no rebuild."
 
 name     = "kap"
 tagline  = "know project, act"

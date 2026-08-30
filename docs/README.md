@@ -43,7 +43,7 @@ each plugin's own README, next to the plugin:
 
 ---
 
-## The two ideas
+## The three ideas
 
 **Nothing is hardcoded.** `kap build` in a Rust crate runs `cargo build`
 because a plugin says so, not because the binary contains the word "cargo".
@@ -55,6 +55,14 @@ and why; `kap build -n` will show you the exact commands before any of them run.
 and nothing else — no TOML library, no JSON library, no CLI parser, no test
 framework, no crypto library. Each of those is a small in-tree implementation.
 That is the project, not a constraint it works around.
+
+**It scales by addition, not by patching.** Because no ecosystem is compiled
+in, supporting a build system kap has never heard of costs about fifteen
+minutes and one text file — no fork, no pull request, no release of kap. A
+working Bazel plugin is nine lines; `cargo-rust` covers the whole Rust
+ecosystem in sixty-four. Ten ship today, and the eleventh does not make any of
+the others harder to maintain, because plugins cannot see or reach each other.
+See [plugins.md](plugins.md).
 
 ---
 

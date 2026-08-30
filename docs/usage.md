@@ -13,6 +13,12 @@ kap help plugin install   # subcommands too
 For the shape of a `kap.toml`, see [configuration.md](configuration.md); for
 writing your own plugin, [plugins.md](plugins.md).
 
+**If kap does not know your build system yet, that is a fifteen-minute
+problem, not a feature request.** Every ecosystem kap supports is one text
+file, and adding one needs no C++, no rebuild, and nobody's approval — see
+[plugins.md](plugins.md) or run `kap plugin new <name>` to start from a
+scaffold.
+
 ---
 
 ## Contents
